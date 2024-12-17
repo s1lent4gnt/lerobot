@@ -15,10 +15,13 @@ from threading import Thread
 
 import numpy as np
 from PIL import Image
+import mujoco
 
 from lerobot.common.robot_devices.utils import (
     RobotDeviceAlreadyConnectedError,
+    SimRobotDeviceAlreadyConnectedError,
     RobotDeviceNotConnectedError,
+    SimRobotDeviceNotConnectedError,
     busy_wait,
 )
 from lerobot.common.utils.utils import capture_timestamp_utc
@@ -468,6 +471,117 @@ class OpenCVCamera:
 
         self.camera.release()
         self.camera = None
+        self.is_connected = False
+
+    def __del__(self):
+        if getattr(self, "is_connected", False):
+            self.disconnect()
+
+class SimCamera:
+    def __init__(self, mujoco_sim, id_camera, camera_index, config: OpenCVCameraConfig | None = None, **kwargs):
+        if config is None:
+            config = OpenCVCameraConfig()
+        
+        # Overwrite config arguments using kwargs
+        config = replace(config, **kwargs)
+
+        # Get model and data from the simulation
+        self.model = mujoco_sim.model
+        self.data = mujoco_sim.data
+        self.camera_index = camera_index
+        self.id_camera = id_camera
+        
+        self.fps = config.fps or 30
+        self.width = config.width or 640
+        self.height = config.height or 480
+        self.channels = config.channels
+        self.color_mode = config.color_mode
+
+        self.is_connected = False
+        self.thread = None
+        self.stop_event = None
+        self.color_image = None
+        self.logs = {}
+        self.logs["delta_timestamp_s"] = 1.0 / self.fps
+        
+        self.renderer = mujoco.Renderer(self.model, height=self.height, width=self.width)
+    
+    def connect(self):
+        if self.is_connected:
+            raise SimRobotDeviceAlreadyConnectedError(f"SimCamera({self.camera_index}) is already connected.")
+
+        self.is_connected = True
+
+    def read(self, model_new, data_new) -> np.ndarray:
+        """Read a frame from the simulation camera."""
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimCamera({self.camera_index}) is not connected. Try running `camera.connect()` first."
+            )
+
+        start_time = time.perf_counter()
+
+        try:
+            # Ensure we have latest simulation state
+            mujoco.mj_forward(model_new, data_new)
+            self.renderer.update_scene(data_new, camera=self.id_camera)
+            color_image = self.renderer.render()
+        except Exception as e:
+            print(f"Error rendering scene: {e}")
+            raise
+
+        # log the number of seconds it took to read the image
+        self.logs["delta_timestamp_s"] = time.perf_counter() - start_time
+        
+        self.color_image = color_image
+        return color_image
+
+    def read_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                self.color_image = self.read()
+            except Exception as e:
+                print(f"Error reading in thread: {e}")
+
+    def async_read(self):
+        """Non-blocking read of a frame."""
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimCamera({self.camera_index}) is not connected. Try running `camera.connect()` first."
+            )
+
+        if self.thread is None:
+            self.stop_event = threading.Event()
+            self.thread = Thread(target=self.read_loop, args=())
+            self.thread.daemon = True
+            self.thread.start()
+
+        num_tries = 0
+        while True:
+            if self.color_image is not None:
+                return self.color_image
+
+            time.sleep(1 / self.fps)
+            num_tries += 1
+            if num_tries > self.fps * 2:
+                raise TimeoutError("Timed out waiting for async_read() to start.")
+
+    def disconnect(self):
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimCamera({self.camera_index}) is not connected. Try running `camera.connect()` first."
+            )
+
+        if self.renderer is not None:
+            del self.renderer
+            self.renderer = None
+
+        if self.thread is not None:
+            self.stop_event.set()
+            self.thread.join()
+            self.thread = None
+            self.stop_event = None
+
         self.is_connected = False
 
     def __del__(self):

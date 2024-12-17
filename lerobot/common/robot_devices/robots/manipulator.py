@@ -14,6 +14,10 @@ from typing import Sequence
 
 import numpy as np
 import torch
+import mujoco
+import multiprocessing
+import inputs
+from enum import Enum
 
 from lerobot.common.robot_devices.cameras.utils import Camera
 from lerobot.common.robot_devices.motors.utils import MotorsBus
@@ -684,3 +688,305 @@ class ManipulatorRobot:
     def __del__(self):
         if getattr(self, "is_connected", False):
             self.disconnect()
+
+class ControllerType(Enum):
+    PS5 = "ps5"
+    XBOX = "xbox"
+
+@dataclass
+class ControllerConfig:
+    resolution: dict
+    scale: dict
+
+class JoystickExpert:
+    """
+    This class provides an interface to the Joystick/Gamepad.
+    It continuously reads the joystick state and provides
+    a "get_action" method to get the latest action and button state.
+    """
+
+    CONTROLLER_CONFIGS = {
+        ControllerType.PS5: ControllerConfig(
+            # PS5 controller joystick values have 8 bit resolution [0, 255]
+            resolution={
+                'ABS_X': 2**8,
+                'ABS_Y': 2**8,
+                'ABS_RX': 2**8,
+                'ABS_RY': 2**8,
+                'ABS_Z': 2**8,
+                'ABS_RZ': 2**8,
+                'ABS_HAT0X': 1.0,
+            },
+            scale={
+                'ABS_X': 0.4,
+                'ABS_Y': 0.4,
+                'ABS_RX': 0.5,
+                'ABS_RY': 0.5,
+                'ABS_Z': 0.8,
+                'ABS_RZ': 1.2,
+                'ABS_HAT0X': 0.5,
+            }
+        ),
+        ControllerType.XBOX: ControllerConfig(
+            # XBOX controller joystick values have 16 bit resolution [0, 65535]
+            resolution={
+                'ABS_X': 2**16,
+                'ABS_Y': 2**16,
+                'ABS_RX': 2**16,
+                'ABS_RY': 2**16,
+                'ABS_Z': 2**8,
+                'ABS_RZ': 2**8,
+                'ABS_HAT0X': 1.0,
+            },
+            scale={
+                'ABS_X': 0.05,
+                'ABS_Y': -0.05,
+                'ABS_RX': -0.03,
+                'ABS_RY': -0.03,
+                'ABS_Z': 0.05,
+                'ABS_RZ': 0.05,
+                'ABS_HAT0X': 0.03,
+            }
+        ),
+    }
+
+    def __init__(self, controller_type=ControllerType.XBOX):
+        self.controller_type = controller_type
+        self.controller_config = self.CONTROLLER_CONFIGS[controller_type]
+
+        # Manager to handle shared state between processes
+        self.manager = multiprocessing.Manager()
+        self.latest_data = self.manager.dict()
+        self.latest_data["action"] = [0.0] * 3
+        self.latest_data["buttons"] = [0.0]
+
+        # Start a process to continuously read Joystick state
+        self.process = multiprocessing.Process(target=self._read_joystick)
+        self.process.daemon = True
+        self.process.start()
+
+
+    def _read_joystick(self):        
+        action = [0.0] * 3
+        buttons = [0.0]
+        
+        while True:
+            try:
+                # Get fresh events
+                events = inputs.get_gamepad()
+          
+                # Process events
+                for event in events:
+                    if event.code in self.controller_config.resolution:
+                        # Calculate relative changes based on the axis
+                        # Normalize the joystick input values to range [-1, 1] expected by the environment
+                        resolution = self.controller_config.resolution[event.code]
+                        if self.controller_type == ControllerType.PS5:
+                            normalized_value = (event.state - (resolution / 2)) / (resolution / 2)
+                        else:
+                            normalized_value = event.state / (resolution / 2)
+                        scaled_value = normalized_value * self.controller_config.scale[event.code]
+
+                        if event.code == 'ABS_X':
+                            action[0] = scaled_value
+                        elif event.code == 'ABS_Y':
+                            action[1] = scaled_value
+                        elif event.code == 'ABS_RY':
+                            action[2] = scaled_value
+
+                        # Handle button events
+                        elif event.code == 'ABS_RZ':
+                            buttons[0] = scaled_value
+                        elif event.code == 'ABS_Z':
+                            # Flip sign so this will go in the down direction
+                            buttons[0] = -scaled_value
+
+                # Update the shared state
+                self.latest_data["action"] = action
+                self.latest_data["buttons"] = buttons
+                
+            except inputs.UnpluggedError:
+                print("No controller found. Retrying...")
+                time.sleep(1)
+
+    def get_action(self):
+        """Returns the latest action and button state from the Joystick."""
+        action = self.latest_data["action"]
+        buttons = self.latest_data["buttons"]
+        return np.array(action), buttons
+
+class SimManipulatorRobot(ManipulatorRobot):
+    def __init__(
+        self,
+        config: ManipulatorRobotConfig | None = None,
+        calibration_dir: Path = ".cache/calibration/koch",
+        controller_type=ControllerType.XBOX,
+        **kwargs,
+    ):
+        super().__init__(config, calibration_dir, **kwargs)
+        self.expert = JoystickExpert(controller_type=controller_type)
+        self._action_scale = np.array([0.05, 1])
+        self.bounds = np.asarray([[-0.1, 0.015, 0.0], [0.1, 0.2, 0.2]])
+
+    def diffik(
+        self,
+        model,
+        data,
+        site_name,
+        joint_names,
+        body_names,
+        damping: float = 0.1,
+        integration_dt: float = 1.0,
+        gravity_compensation: bool = True,
+        max_angvel: float = 0.785,
+    ):
+        site_id = model.site(site_name).id
+
+        body_ids = [model.body(name).id for name in body_names]
+        if gravity_compensation:
+            model.body_gravcomp[body_ids] = 1.0
+
+        dof_ids = np.array([model.joint(name).id for name in joint_names])
+
+        # Mocap body we will control with our mouse.
+        mocap_id = model.body("target").mocapid[0]
+
+        # Pre-allocate numpy arrays.
+        jac = np.zeros((3, model.nv))
+        diag = damping * np.eye(3)
+        twist = np.zeros(3)
+        eye = np.eye(model.nv)
+        Kpos: float = 0.95
+
+        # Nullspace P gain.
+        Kn = np.asarray([0.0, 0.0, 0.0, 0.0])
+
+        # Initial joint configuration saved as a keyframe in the XML file.
+        key_name = "home"
+        q0 = model.key(key_name).qpos
+            
+        dx = data.mocap_pos[mocap_id] - data.site(site_id).xpos
+        twist = Kpos * dx / integration_dt
+
+        # Get the Jacobian with respect to the end-effector site.
+        mujoco.mj_jacSite(model, data, jac, None, site_id)
+
+        # Solve system of equations: J @ dq = error.
+        dq = jac[:, dof_ids].T @ np.linalg.solve(jac[:, dof_ids] @ jac[:, dof_ids].T + diag, twist)
+
+        # Nullspace control biasing joint velocities towards the home configuration.
+        dq += (eye[dof_ids,dof_ids] - np.linalg.pinv(jac[:, dof_ids], rcond=1e-4) @ jac[:, dof_ids]) @ (Kn * (q0 - data.qpos)[dof_ids])
+
+        # Scale down joint velocities if they exceed maximum.
+        if max_angvel > 0:
+            dq_abs_max = np.abs(dq).max()
+            if dq_abs_max > max_angvel:
+                dq *= max_angvel / dq_abs_max
+
+        # Integrate joint velocities to obtain joint positions.
+        q = data.qpos[dof_ids].copy()
+        q += dq * integration_dt
+
+        # Set the control signal.
+        np.clip(q[dof_ids], *model.jnt_range[dof_ids].T, out=q[dof_ids])
+        
+        return q[dof_ids]
+        
+    def teleop_step(self, record_data=False):
+        """Override teleop_step to use joystick control instead of real leader arm"""
+        print("Starting teleop_step...")  # Debug print
+        if not self.is_connected:
+            raise RobotDeviceNotConnectedError(
+                "ManipulatorRobot is not connected. You need to run `robot.connect()`."
+            )
+
+        # Get joystick action
+        try:
+            action, buttons = self.expert.get_action()
+            # print(f"Got joystick action: {action}, buttons: {buttons}")  # Debug print
+        except Exception as e:
+            print(f"Error getting joystick action: {e}")  # Debug print
+            raise
+       
+        # Update follower arm positions through inverse kinematics
+        follower_pos = {}
+        for name in self.follower_arms:
+            before_lread_t = time.perf_counter()
+            
+            deadzone = 0.001
+            if np.linalg.norm(action) < deadzone:
+                action = np.zeros_like(action)
+
+            x, y, z = action
+            grasp = buttons[0]
+
+            # Set the mocap position.
+            pos = self.follower_arms[name].data.mocap_pos[0].copy()
+            dpos = np.asarray([x, y, z]) * self._action_scale[0]
+            npos = np.clip(pos + dpos, *self.bounds)
+            self.follower_arms[name].data.mocap_pos[0] = npos
+
+            # Set gripper grasp.
+            g = self.follower_arms[name].data.ctrl[5]
+            dg = grasp * self._action_scale[1]
+            ng = np.clip(g + dg, -2.3, 0.032)
+            self.follower_arms[name].data.ctrl[5] = ng
+
+            for _ in range(20):
+                tau = self.diffik(
+                    self.follower_arms[name].model,
+                    self.follower_arms[name].data,
+                    site_name="end_effector_site",
+                    joint_names=["joint_1", "joint_2", "joint_3", "joint_4"],
+                    body_names=["link_1", "link_2", "link_3", "link_4"],
+                )
+
+                # Set the target position
+                self.follower_arms[name].data.ctrl[:4] = tau
+
+                # Step the simulation forward
+                mujoco.mj_step(self.follower_arms[name].model, self.follower_arms[name].data)
+
+            # Combine all joint positions
+            follower_pos[name] = self.follower_arms[name].data.qpos[:6].copy()
+            
+            self.logs[f"read_follower_{name}_pos_dt_s"] = time.perf_counter() - before_lread_t
+
+        if not record_data:
+            return
+
+        # Record data if requested (same as parent class)
+        follower_pos = {}
+        for name in self.follower_arms:
+            before_fread_t = time.perf_counter()
+            follower_pos[name] = self.follower_arms[name].read("Present_Position")
+            follower_pos[name] = torch.from_numpy(follower_pos[name])
+            self.logs[f"read_follower_{name}_pos_dt_s"] = time.perf_counter() - before_fread_t
+
+        state = []
+        for name in self.follower_arms:
+            if name in follower_pos:
+                state.append(follower_pos[name])
+        state = torch.cat(state)
+
+        action = []
+        for name in self.follower_arms:
+            if name in follower_pos:
+                action.append(follower_pos[name])
+        action = torch.cat(action)
+
+        images = {}
+        for name in self.cameras:
+            before_camread_t = time.perf_counter()
+            images[name] = self.cameras[name].read(self.follower_arms["main"].model, self.follower_arms["main"].data)
+            images[name] = torch.from_numpy(images[name])
+            self.logs[f"read_camera_{name}_dt_s"] = self.cameras[name].logs["delta_timestamp_s"]
+            self.logs[f"async_read_camera_{name}_dt_s"] = time.perf_counter() - before_camread_t
+
+        obs_dict, action_dict = {}, {}
+        obs_dict["observation.state"] = state
+        action_dict["action"] = action
+        for name in self.cameras:
+            obs_dict[f"observation.images.{name}"] = images[name]
+
+        return obs_dict, action_dict

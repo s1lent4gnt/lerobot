@@ -7,8 +7,14 @@ from copy import deepcopy
 
 import numpy as np
 import tqdm
+import mujoco
 
-from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
+from lerobot.common.robot_devices.utils import (
+    RobotDeviceAlreadyConnectedError,
+    RobotDeviceNotConnectedError,
+    SimRobotDeviceAlreadyConnectedError,
+    SimRobotDeviceNotConnectedError
+)
 from lerobot.common.utils.utils import capture_timestamp_utc
 
 PROTOCOL_VERSION = 2.0
@@ -860,6 +866,199 @@ class DynamixelMotorsBus:
         self.packet_handler = None
         self.group_readers = {}
         self.group_writers = {}
+        self.is_connected = False
+
+    def __del__(self):
+        if getattr(self, "is_connected", False):
+            self.disconnect()
+
+class SimDynamixelMotorsBus:
+    
+    # TODO(rcadene): Add a script to find the motor indices without DynamixelWizzard2
+    """
+    The DynamixelMotorsBus class allows to efficiently read and write to the simulated Bus managing mujoco environment. 
+    The class is designed to be used with a mujoco environment with the low cost robot 6DoF Robot.
+    """
+
+    def __init__(
+        self,
+        motors,
+        path_scene="lerobot/configs/assets/low_cost_robot_6dof/pick_place_cube.xml"
+    ):
+        
+        self.path_scene = path_scene
+        self.model = mujoco.MjModel.from_xml_path(path_scene)
+        self.data  = mujoco.MjData(self.model)
+        self.is_connected = False
+        self.motors = motors
+        self.logs = {}
+        self.calibration = None
+        # Initialize torque as enabled
+        self._torque_enabled = np.ones(len(motors), dtype=np.int32)
+
+    def connect(self):
+        self.is_connected = True
+
+    def reconnect(self):
+        self.is_connected = True
+
+    def are_motors_configured(self):
+        return True
+
+    def configure_motors(self):
+        print("Configuration is done!")
+
+    def find_motor_indices(self, possible_ids=None):
+        return [1, 2, 3, 4, 5, 6]
+
+    def set_bus_baudrate(self, baudrate):
+        return
+
+    @property
+    def motor_names(self) -> list[str]:
+        return list(self.motors.keys())
+
+    @property
+    def motor_models(self) -> list[str]:
+        return [model for _, model in self.motors.values()]
+
+    @property
+    def motor_indices(self) -> list[int]:
+        return [idx for idx, _ in self.motors.values()]
+
+    def set_calibration(self, calibration: dict[str, tuple[int, bool]]):
+        self.calibration = calibration
+
+    def apply_calibration(self, values: np.ndarray | list, motor_names: list[str] | None):
+        # Convert from unsigned int32 original range [0, 2**32[ to centered signed int32 range [-2**31, 2**31[
+        values = values.astype(np.int32)
+        return values
+
+    def revert_calibration(self, values: np.ndarray | list, motor_names: list[str] | None):
+        """Inverse of `apply_calibration`."""
+        return values
+
+    def _check_joint_limits(self, q):
+        """Check if the joints is under or above its limits"""
+        for i in range(len(q)):
+            q[i] = max(self.model.jnt_range[i][0], min(q[i], self.model.jnt_range[i][1]))
+
+        return q
+
+    ## read the motor values from the mujoco environment
+    # motor_models: The motor models to read
+    # motor_ids: The motor ids to read
+    # data_name: The data name to read
+    
+    def _read_with_motor_ids(self, motor_models, motor_ids, data_name):
+        return_list = True
+        if not isinstance(motor_ids, list):
+            return_list = False
+            motor_ids = [motor_ids]
+
+        values = []
+        for idx in motor_ids:
+            values.append(self.data.qpos[-6+idx-1])
+
+        if return_list:
+            return values
+        else:
+            return values[0]
+
+    ## read the motor values from the mujoco environment
+    # data_name: The data name to read
+    # motor_names: The motor names to read
+
+    def read(self, data_name, motor_names: str | list[str] | None = None):
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimDynamixelMotorsBus({self.path_scene}) is not connected. You need to run `motors_bus.connect()`."
+            )
+
+        if data_name == "Torque_Enable":
+            return self._torque_enabled
+
+        values = []
+        if motor_names is None:
+            for idx in range(1, 7):
+                values.append(self.data.qpos[idx-6-1])
+        else:
+            for name in motor_names:
+                idx_motor = self.motors[name][0]-6-1
+                values.append(self.data.qpos[idx_motor])
+
+        return np.asarray(values)
+
+
+    ## write the motor values to the mujoco environment
+    # data_name: The data name to write
+    # values: The values to write
+    # motor_names: The motor names to write
+
+    def _write_with_motor_ids(self, motor_models, motor_ids, data_name, values):
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimDynamixelMotorsBus({self.path_scene}) is not connected. You need to run `motors_bus.connect()`."
+            )        
+        for idx, value in zip(motor_ids, values):
+            self.data.qpos[idx-6-1] = value
+
+
+    ## convert the real robot joint positions to mujoco joint positions
+    # with support for inverted joints
+    # real_positions: Joint positions in degrees
+    # transforms: List of transforms to apply to each joint
+    # oppose: List of oppositions to apply to each joint
+
+    @staticmethod
+    def real_to_mujoco(real_positions, transforms, oppose):
+        """
+        Convert joint positions from real robot (in degrees) to Mujoco (in radians),
+        with support for inverted joints.
+        
+        Parameters:
+        real_positions (np.array): Joint positions in degrees.
+        transforms (list): List of transforms to apply to each joint.
+        oppose (list): List of oppositions to apply to each joint.
+        
+        Returns:
+        np.array: Joint positions in radians.
+        """
+        real_positions = np.array(real_positions)
+        mujoco_positions = real_positions * (np.pi / 180.0)
+
+        for id in range(6):
+            mujoco_positions[id] = transforms[id] + mujoco_positions[id]
+            mujoco_positions[id] *= oppose[id]
+
+        return mujoco_positions
+
+
+    def write(self, data_name, values: int | float | np.ndarray, motor_names: str | list[str] | None = None):
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimDynamixelMotorsBus({self.path_scene}) is not connected. You need to run `motors_bus.connect()`."
+            )
+        
+        if data_name == "Torque_Enable":
+            if isinstance(values, (int, float, np.integer)):
+                self._torque_enabled[:] = values
+            else:
+                self._torque_enabled = np.array(values)
+            return
+
+        if data_name in ["Operating_Mode", "Homing_Offset", "Drive_Mode", "Position_P_Gain", "Position_I_Gain", "Position_D_Gain"]:
+            return
+
+        if motor_names is None or len(motor_names) == 6:
+            self.data.ctrl = values
+
+    def disconnect(self):
+        if not self.is_connected:
+            raise SimRobotDeviceNotConnectedError(
+                f"SimDynamixelMotorsBus({self.path_scene}) is not connected. Try running `motors_bus.connect()` first."
+            )
+
         self.is_connected = False
 
     def __del__(self):

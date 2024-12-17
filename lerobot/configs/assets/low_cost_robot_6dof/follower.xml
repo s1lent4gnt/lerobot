@@ -1,0 +1,251 @@
+<mujoco model="follower">
+  <compiler angle="radian" meshdir="./follower_meshes/"/>
+
+  <default>
+    <default class="follower">
+      <!-- <joint armature="0.1" damping="1" stiffness="0" frictionloss="0.1"/> -->
+      <joint armature="0.5" damping="1.5" stiffness="0" frictionloss="0.2"/>
+      <!-- <position kp="100" kv="10" inheritrange="1"/> -->
+      <!-- <position kp="80" kv="8" inheritrange="1"/> -->
+      <default class="visual">
+        <geom type="mesh" group="2" contype="0" conaffinity="0"/>
+      </default>
+      <default class="collision">
+        <geom type="mesh" group="3" mass="0" density="0"/>
+        <!-- <default class="finger"> -->
+          <!-- <geom type="mesh" priority="1" condim="6" solimp="0.015 1 0.036" friction="1.5"/> -->
+            <!-- <geom type="mesh" priority="1" condim="3" 
+                  solimp="0.95 0.99 0.001" 
+                  solref="0.004 1"
+                  friction="0.7"/>
+        </default> -->
+      </default>
+      <site size="0.001" group="4" rgba="0.5 0.5 0.5 0.3"/>
+    </default>
+  </default>
+
+  <asset>
+    <material name="black" rgba="0.1 0.1 0.1 1"/>
+    <material name="white" rgba="0.8 0.8 0.8 1"/>
+
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="link_1" file="link_1.STL"/>
+    <mesh name="link_2" file="link_2.STL"/>
+    <mesh name="link_3" file="link_3.STL"/>
+    <mesh name="link_4" file="link_4.STL"/>
+    <mesh name="link_5" file="link_5.STL"/>
+    <mesh name="link_6" file="link_6.STL"/>
+
+    <mesh name="base_link_motor" file="base_link_motor.STL"/>
+    <mesh name="link_1_motor" file="link_1_motor.STL"/>
+    <mesh name="link_2_motor" file="link_2_motor.STL"/>
+    <mesh name="link_3_motor" file="link_3_motor.STL"/>
+    <mesh name="link_4_motor" file="link_4_motor.STL"/>
+    <mesh name="link_5_motor" file="link_5_motor.STL"/>
+
+    <mesh name="base_link_collision" file="base_link_collision.stl"/>
+    <mesh name="link_1_collision" file="link_1_collision.stl"/>
+    <mesh name="link_2_collision" file="link_2_collision.stl"/>
+    <mesh name="link_3_collision" file="link_3_collision.stl"/>
+    <mesh name="link_4_collision" file="link_4_collision.stl"/>
+    <mesh name="link_5_collision" file="link_5_collision.stl"/>
+    <mesh name="link_6_collision" file="link_6_collision.stl"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_link" childclass="follower" quat="-0.707 0. 0. 0.707">
+      <geom mesh="base_link" class="visual" material="white"/>
+      <geom mesh="base_link_motor" class="visual" material="black"/>
+      <geom mesh="base_link_collision" class="collision"/>
+      
+      <body name="link_1" pos="0.012 0 0.0409" >
+        <inertial pos="0.011924 -0.00048792 0.013381" quat="-0.0190903 0.705417 0.0178052 0.708312" mass="0.05014" diaginertia="1.44921e-05 1.2371e-05 7.59138e-06"/>
+        <joint name="joint_1" pos="0 0 0" axis="0 0 -1" range="-3.14 3.14"/>
+        <geom mesh="link_1" class="visual" material="white"/>
+        <geom mesh="link_1_motor" class="visual" material="black"/>
+        <geom mesh="link_1_collision" class="collision"/>
+
+        <body name="link_2" pos="0 -0.0209 0.0154">
+          <inertial pos="0.0011747 0.02097 0.071547" quat="0.998768 2.01447e-05 0.0496266 0.000367169" mass="0.050177" diaginertia="3.73065e-05 3.3772e-05 7.94901e-06"/>
+          <joint name="joint_2" pos="0 0 0" axis="0 1 0" range="-3.14 3.14"/>
+          <geom mesh="link_2" class="visual" material="white"/>
+          <geom mesh="link_2_motor" class="visual" material="black"/>
+          <geom mesh="link_2_collision" class="collision"/>
+          
+          <body name="link_3" pos="-0.0148 0.0065 0.1083">
+            <inertial pos="-0.05537 0.014505 0.0028659" quat="8.17663e-05 0.710999 -4.16983e-05 0.703193" mass="0.06379" diaginertia="2.45081e-05 2.2231e-05 7.34061e-06"/>
+            <joint name="joint_3" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14"/>
+            <geom mesh="link_3" class="visual" material="white"/>
+            <geom mesh="link_3_motor" class="visual" material="black"/>
+            <geom mesh="link_3_collision" class="collision"/>
+
+            <body name="link_4" pos="-0.10048 5e-05 0.0026999">
+              <inertial pos="-0.02652 0.019195 -9.0614e-06" quat="0.707361 0.706812 0.00580344 0.00484124" mass="0.019805" diaginertia="2.95813e-06 2.8759e-06 1.07787e-06"/>
+              <joint name="joint_4" pos="0 0 0" axis="0 1 0" range="-3.14 3.14"/>
+              <geom mesh="link_4" class="visual" material="white"/>
+              <geom mesh="link_4_motor" class="visual" material="black"/>
+              <geom mesh="link_4_collision" class="collision"/>
+
+              <body name="link_5" pos="-0.045 0.013097 0">
+                <inertial pos="-0.019091 0.0053379 0.00018011" quat="0.105295 0.703509 -0.0986543 0.695885" mass="0.029277" diaginertia="8.11303e-06 7.14908e-06 3.27429e-06"/>
+                <joint name="joint_5" pos="0 0 0" axis="1 0 0" range="-3.14 3.14"/>
+                <geom mesh="link_5" class="visual" material="white"/>
+                <geom mesh="link_5_motor" class="visual" material="black"/>
+                <!-- <geom mesh="link_5_collision" contype="0" conaffinity="0"/> -->
+
+                <!-- <site name="end_effector_site" pos="-0.06429 0.00327 0.0011" quat="1 0 0 0"/> -->
+                <body name="attachment" pos="-0.06429 0.00327 0.0011" quat="0 0 0 1">
+                  <site name="end_effector_site" rgba="1 0 0 0" size="0.01" group="1"/>
+                </body>
+
+                <!-- <camera name="camera_top" pos="-0.06429 0.00327 0.0011" euler="0 0 0" mode="fixed"/> -->
+
+                <body name="joint_5-pad_1">
+                    <geom name="static_finger_pad_1" 
+                          type="box" 
+                          friction="0.7"
+                          condim="6"
+                          solimp="0.95 0.99 0.001" solref="0.004 1"
+                          mass="0" 
+                          priority="1"
+                          size="0.002 0.002 0.0025" 
+                          pos="-0.0668 0.0107 0.0025" 
+                          rgba="0.1 0.0 0.0 1"/>
+                </body>
+
+                <body name="joint_5-pad_3">
+                    <geom name="static_finger_pad_3" 
+                          type="box" 
+                          friction="0.8"
+                          condim="6"
+                          solimp="0.95 0.99 0.001" solref="0.004 1"
+                          mass="0" 
+                          priority="1"
+                          size="0.002 0.002 0.0025" 
+                          pos="-0.0668 0.0107 -0.0025" 
+                          rgba="0.2 0.0 0.0 1"/>
+                </body>
+
+                <body name="joint_5-pad_2">
+                    <geom name="static_finger_pad_2" 
+                          type="box" 
+                          friction="0.6"
+                          solimp="0.95 0.99 0.001" solref="0.004 1"
+                          condim="6" 
+                          mass="0" 
+                          priority="1"
+                          size="0.002 0.002 0.0025" 
+                          pos="-0.0628 0.0107 0.0025" 
+                          rgba="0.1 0.1 0.0 1"/>
+                </body>
+
+                <body name="joint_5-pad_4">
+                    <geom name="static_finger_pad_4" 
+                          type="box" 
+                          friction="0.5"
+                          solimp="0.95 0.99 0.001" solref="0.004 1"
+                          condim="6" 
+                          mass="0" 
+                          priority="1"
+                          size="0.002 0.002 0.0025" 
+                          pos="-0.0628 0.0107 -0.0025" 
+                          rgba="0.1 0.2 0.0 1"/>
+                </body>
+
+                <body name="link_6" pos="-0.01315 -0.0075 0.0145">
+                  <inertial pos="-0.02507 0.0010817 -0.01414" quat="0.528148 0.5474 0.466496 0.451436" mass="0.012831" diaginertia="3.49922e-06 2.45768e-06 1.4645e-06"/>
+                  <joint name="joint_6" pos="0 0 0" axis="0 0 -1" range="-2.45 0.032" frictionloss="0.1"/>
+                  <geom mesh="link_6" class="visual" material="white"/>
+                  <!-- <geom mesh="link_6_collision" contype="0" conaffinity="0"/> -->
+                  <!-- <site name="link_6"/> -->
+                  
+                  <!-- <body name="joint_6-pad">
+                    <geom name="moving_finger_pad" type="box" class="finger" condim="3" friction="1.7" mass="0" solimp="0.9 0.95 0.001" solref="0.02 1" size="0.006 0.006 0.006" pos="-0.0495 0.0072 -0.0145" rgba="0.1 0.0 0.0 1"/>
+                  </body> -->
+                  <body name="joint_6-pad_1">
+                      <geom name="moving_finger_pad_1" 
+                            type="box" 
+                            condim="6" 
+                            solimp="0.95 0.99 0.001" solref="0.004 1"
+                            friction="0.7"
+                            mass="0" 
+                            priority="1"
+                            size="0.002 0.002 0.0025" 
+                            pos="-0.0536 0.0113 -0.012" 
+                            rgba="0.1 0.0 0.0 1"/>
+                  </body>
+
+                  <body name="joint_6-pad_3">
+                      <geom name="moving_finger_pad_3" 
+                            type="box" 
+                            condim="6"
+                            solimp="0.95 0.99 0.001" solref="0.004 1"
+                            friction="0.8"
+                            mass="0" 
+                            priority="1"
+                            size="0.002 0.002 0.0025" 
+                            pos="-0.0536 0.0113 -0.017" 
+                            rgba="0.2 0.0 0.0 1"/>
+                  </body>
+
+                  <body name="joint_6-pad_2">
+                      <geom name="moving_finger_pad_2" 
+                            type="box" 
+                            condim="6"
+                            solimp="0.95 0.99 0.001" solref="0.004 1"
+                            friction="0.6"
+                            mass="0" 
+                            priority="1"
+                            size="0.002 0.002 0.0025" 
+                            pos="-0.0496 0.0113 -0.012" 
+                            rgba="0.1 0.1 0.0 1"/>
+                  </body>
+
+                  <body name="joint_6-pad_4">
+                      <geom name="moving_finger_pad_4" 
+                            type="box" 
+                            condim="6"
+                            solimp="0.95 0.99 0.001" solref="0.004 1"
+                            friction="0.5"
+                            mass="0" 
+                            priority="1"
+                            size="0.002 0.002 0.0025" 
+                            pos="-0.0496 0.0113 -0.017" 
+                            rgba="0.1 0.2 0.0 1"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude name="exclude_base_link_link_1" body1="base_link" body2="link_1"/>
+  </contact>
+
+  <!-- <actuator>
+    <position class="follower" name="joint_1" joint="joint_1" kp="100" kv="10" forcerange="-100 100"/>
+    <position class="follower" name="joint_2" joint="joint_2" kp="100" kv="10" forcerange="-100 100"/>
+    <position class="follower" name="joint_3" joint="joint_3" kp="80" kv="10" forcerange="-100 100"/>
+    <position class="follower" name="joint_4" joint="joint_4" kp="70" kv="10" forcerange="-100 100"/>
+    <position class="follower" name="joint_5" joint="joint_5" kp="80" kv="10" forcerange="-100 100"/>
+    <position class="follower" name="joint_6" joint="joint_6" kp="20" kv="2" forcerange="-2 2"/>
+  </actuator> -->
+
+  <actuator>
+      <position class="follower" name="joint_1" joint="joint_1" kp="2000" kv="5" forcerange="-87 87"/>
+      <position class="follower" name="joint_2" joint="joint_2" kp="100" kv="5" forcerange="-87 87"/>
+      <position class="follower" name="joint_3" joint="joint_3" kp="100" kv="0" forcerange="-87 87"/>
+      <position class="follower" name="joint_4" joint="joint_4" kp="0" kv="0" forcerange="-12 12"/>
+      <position class="follower" name="joint_5" joint="joint_5" kp="10" kv="0" forcerange="-1 1"/>
+      <position class="follower" name="joint_6" joint="joint_6" kp="10" kv="0" forcerange="-1 1"/>
+  </actuator>
+
+  <keyframe>
+    <key name="home" qpos="0 0 0 0 0 0 0.0 0.2 0.01 1 0 0 0"/>
+  </keyframe>
+
+</mujoco>
