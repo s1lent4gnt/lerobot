@@ -999,6 +999,8 @@ def record(
         viewer.sync()
         
         enable_teleoperation = policy is None
+        # Init env
+        robot.initialize_episode(robot.follower_arms["main"].model, robot.follower_arms["main"].data)
         log_say("Warmup record", play_sounds)
         warmup_record(robot, viewer, events, enable_teleoperation, warmup_time_s, display_cameras, fps)
 
@@ -1015,6 +1017,8 @@ def record(
             # if multi_task:
             #     task = input("Enter your task description: ")
 
+            # Init env
+            robot.initialize_episode(robot.follower_arms["main"].model, robot.follower_arms["main"].data)
             log_say(f"Recording episode {dataset.num_episodes}", play_sounds)
 
             record_episode(
