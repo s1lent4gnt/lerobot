@@ -830,7 +830,7 @@ class SimManipulatorRobot(ManipulatorRobot):
         self.bounds = np.asarray([[-0.1, 0.015, 0.0], [0.1, 0.2, 0.2]])
         self.cube_low = np.array([-0.2 / 2, 0.015, .0055])
         self.cube_high = np.array([0.2 / 2, 0.2 / 2, .0055])
-        self.target_low = np.array([-0.2 / 2, -0.2 / 2, .0055])
+        self.target_low = np.array([-0.2 / 2, 0.015 / 2, .0055])
         self.target_high = np.array([0.2 / 2, 0.2 / 2, 0.1])
         self.num_dof = 6
 
