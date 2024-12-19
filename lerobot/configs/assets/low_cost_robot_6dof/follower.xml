@@ -236,12 +236,12 @@
   </actuator> -->
 
   <actuator>
-      <position class="follower" name="joint_1" joint="joint_1" kp="2000" kv="5" forcerange="-87 87"/>
-      <position class="follower" name="joint_2" joint="joint_2" kp="100" kv="5" forcerange="-87 87"/>
-      <position class="follower" name="joint_3" joint="joint_3" kp="100" kv="0" forcerange="-87 87"/>
-      <position class="follower" name="joint_4" joint="joint_4" kp="0" kv="0" forcerange="-12 12"/>
-      <position class="follower" name="joint_5" joint="joint_5" kp="10" kv="0" forcerange="-1 1"/>
-      <position class="follower" name="joint_6" joint="joint_6" kp="10" kv="0" forcerange="-1 1"/>
+      <position class="follower" name="joint_1" joint="joint_1" kp="100" kv="10" forcerange="-87 87"/>
+      <position class="follower" name="joint_2" joint="joint_2" kp="100" kv="10" forcerange="-87 87"/>
+      <position class="follower" name="joint_3" joint="joint_3" kp="100" kv="10" forcerange="-87 87"/>
+      <position class="follower" name="joint_4" joint="joint_4" kp="100" kv="10" forcerange="-12 12"/>
+      <position class="follower" name="joint_5" joint="joint_5" kp="100" kv="10" forcerange="-10 10"/>
+      <position class="follower" name="joint_6" joint="joint_6" kp="100" kv="10" forcerange="-2 2"/>
   </actuator>
 
   <keyframe>
