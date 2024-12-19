@@ -15,6 +15,7 @@ from typing import Sequence
 import numpy as np
 import torch
 import mujoco
+import mink
 import multiprocessing
 import inputs
 from enum import Enum
@@ -827,6 +828,72 @@ class SimManipulatorRobot(ManipulatorRobot):
         self.expert = JoystickExpert(controller_type=controller_type)
         self._action_scale = np.array([0.05, 1])
         self.bounds = np.asarray([[-0.1, 0.015, 0.0], [0.1, 0.2, 0.2]])
+        self.cube_low = np.array([-0.2 / 2, 0.015, .0055])
+        self.cube_high = np.array([0.2 / 2, 0.2 / 2, .0055])
+        self.target_low = np.array([-0.2 / 2, -0.2 / 2, .0055])
+        self.target_high = np.array([0.2 / 2, 0.2 / 2, 0.1])
+        self.num_dof = 6
+
+    def initialize_episode(self, model, data):
+        """Initialize the robot state at the start of each episode"""
+        self.configuration = mink.Configuration(model)
+
+        self.end_effector_task = mink.FrameTask(
+            frame_name="end_effector_site",
+            frame_type="site",
+            position_cost=200.0,
+            orientation_cost=0.0,
+            lm_damping=0.01,
+        )
+
+        self.tasks = [self.end_effector_task]
+
+        mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
+        self.configuration.update(data.qpos)
+        mujoco.mj_forward(model, data)
+        
+        # Initialize the mocap target at the end-effector site.
+        mink.move_mocap_to_frame(model, data, "target", "attachment_site", "site")
+
+        # Update cube and target position
+        cube_pos = np.random.uniform(self.cube_low, self.cube_high)
+        cube_rot = np.array([1.0, 0.0, 0.0, 0.0])
+        data.qpos[self.num_dof : self.num_dof + 7] = np.concatenate([cube_pos, cube_rot])
+
+        # Sample the target position
+        target_pos = np.random.uniform(self.target_low, self.target_high).astype(np.float32)
+
+        # Update visualization
+        model.geom("target_region").pos = target_pos[:]
+
+        # Step the simulation
+        mujoco.mj_forward(model, data)
+    
+    def mink_solve_ik(
+        self,
+        model,
+        data,
+        solver: str = "quadprog",
+        pos_threshold: float = 1e-4,
+        ori_threshold: float = 1e-4,
+        max_iters: int = 20,
+    ) -> np.ndarray:
+        """Solve IK using mink"""
+        # Update end-effector task
+        t_wt = mink.SE3.from_mocap_name(model, data, "target")
+        self.end_effector_task.set_target(t_wt)
+
+        # Compute velocity and integrate into the next configuration.
+        for _ in range(max_iters):
+            vel = mink.solve_ik(self.configuration, self.tasks, model.opt.timestep, solver, 1e-3)
+            self.configuration.integrate_inplace(vel, model.opt.timestep)
+            err = self.end_effector_task.compute_error(self.configuration)
+            pos_achieved = np.linalg.norm(err[:3]) <= pos_threshold
+            ori_achieved = np.linalg.norm(err[3:]) <= ori_threshold
+            if pos_achieved and ori_achieved:
+                break
+        
+        return self.configuration.q[:4]
 
     def diffik(
         self,
@@ -932,15 +999,12 @@ class SimManipulatorRobot(ManipulatorRobot):
             ng = np.clip(g + dg, -2.3, 0.032)
             self.follower_arms[name].data.ctrl[5] = ng
 
-            for _ in range(20):
-                tau = self.diffik(
-                    self.follower_arms[name].model,
-                    self.follower_arms[name].data,
-                    site_name="end_effector_site",
-                    joint_names=["joint_1", "joint_2", "joint_3", "joint_4"],
-                    body_names=["link_1", "link_2", "link_3", "link_4"],
-                )
+            tau = self.mink_solve_ik(
+                self.follower_arms[name].model,
+                self.follower_arms[name].data,
+            )
 
+            for _ in range(20):
                 # Set the target position
                 self.follower_arms[name].data.ctrl[:4] = tau
 
