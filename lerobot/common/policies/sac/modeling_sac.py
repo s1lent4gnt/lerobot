@@ -56,24 +56,21 @@ class SACPolicy(
             )
         else:
             self.normalize_inputs = nn.Identity()
-        # self.normalize_targets = Normalize(
-        #     config.output_shapes, config.output_normalization_modes, dataset_stats
-        # )
-        # self.unnormalize_outputs = Unnormalize(
-        #     config.output_shapes, config.output_normalization_modes, dataset_stats
-        # )
-        # encoder_critic = SACObservationEncoder(config)
-        # encoder_actor = SACObservationEncoder(config)
-
-        encoder_critic = None
-        encoder_actor = None
+        self.normalize_targets = Normalize(
+            config.output_shapes, config.output_normalization_modes, dataset_stats
+        )
+        self.unnormalize_outputs = Unnormalize(
+            config.output_shapes, config.output_normalization_modes, dataset_stats
+        )
+        encoder_critic = SACObservationEncoder(config)
+        encoder_actor = SACObservationEncoder(config)
         # Define networks
         critic_nets = []
         for _ in range(config.num_critics):
             critic_net = Critic(
                 encoder=encoder_critic,
                 network=MLP(
-                    input_dim=config.input_shapes["observation.state"][0] + config.output_shapes["action"][0],
+                    input_dim=encoder_critic.output_dim + config.output_shapes["action"][0],
                     **config.critic_network_kwargs,
                 ),
             )
@@ -84,7 +81,7 @@ class SACPolicy(
             target_critic_net = Critic(
                 encoder=encoder_critic,
                 network=MLP(
-                    input_dim=config.input_shapes["observation.state"][0] + config.output_shapes["action"][0],
+                    input_dim=encoder_critic.output_dim + config.output_shapes["action"][0],
                     **config.critic_network_kwargs,
                 ),
             )
@@ -99,12 +96,12 @@ class SACPolicy(
 
         self.actor = Policy(
             encoder=encoder_actor,
-            network=MLP(input_dim=config.input_shapes["observation.state"][0], **config.actor_network_kwargs),
+            network=MLP(input_dim=encoder_actor.output_dim, **config.actor_network_kwargs),
             action_dim=config.output_shapes["action"][0],
             **config.policy_kwargs,
         )
         if config.target_entropy is None:
-            config.target_entropy = -np.prod(config.output_shapes["action"][0])  # (-dim(A)/2)
+            config.target_entropy = -np.prod(config.output_shapes["action"][0]) / 2  # (-dim(A)/2)
         # TODO: fix later device
         # TODO: Handle the case where the temparameter is a fixed
         self.log_alpha = torch.zeros(1, requires_grad=True, device="cuda")
@@ -129,7 +126,7 @@ class SACPolicy(
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Select action for inference/evaluation"""
         actions, _, _ = self.actor(batch)
-        # actions = self.unnormalize_outputs({"action": actions})["action"]
+        actions = self.unnormalize_outputs({"action": actions})["action"]
         return actions
 
     def critic_forward(
@@ -151,93 +148,105 @@ class SACPolicy(
 
     def compute_critic_loss(self, batch: dict[str, Tensor]) -> Tuple[Tensor, dict]:
         """Compute critic loss separately"""
-        # Extract batch components
+
+        batch = self.normalize_inputs(batch)
+        # batch shape is (b, 2, ...) where index 1 returns the current observation and
+        # the next observation for calculating the right td index.
+        actions = batch["action"][:, 0]
+        rewards = batch["next.reward"][:, 0]
         observations = {}
         next_observations = {}
         for k in batch:
             if k.startswith("observation."):
                 observations[k] = batch[k][:, 0]
                 next_observations[k] = batch[k][:, 1]
-        
-        actions = batch["action"][:, 0]
-        rewards = batch["next.reward"].flatten()
-        dones = batch["next.done"].flatten()
 
-        # Compute next state values
         with torch.no_grad():
-            next_actions, next_log_probs, _ = self.actor(next_observations)
-            next_q_targets = self.critic_forward(next_observations, next_actions, use_target=True)
-            min_next_q_target = next_q_targets.min(dim=0)[0]
-            backup = min_next_q_target - self.temperature * next_log_probs
-            td_target = rewards + (1 - dones.float()) * self.config.discount * backup
+            next_action_preds, next_log_probs, _ = self.actor(next_observations)
 
-        # Get current Q values
-        current_q_values = self.critic_forward(observations, actions, use_target=False)
-        
-        # Compute critic loss
-        critics_loss = 0
-        for q_value in current_q_values:
-            critics_loss += F.mse_loss(q_value, td_target)
+            # 2- compute q targets
+            q_targets = self.critic_forward(next_observations, next_action_preds, use_target=True)
+
+            # subsample critics to prevent overfitting if use high UTD (update to date)
+            if self.config.num_subsample_critics is not None:
+                indices = torch.randperm(self.config.num_critics)
+                indices = indices[: self.config.num_subsample_critics]
+                q_targets = q_targets[indices]
+
+            # critics subsample size
+            min_q, _ = q_targets.min(dim=0)  # Get values from min operation
+            if self.config.use_backup_entropy:
+                min_q -= self.temperature * next_log_probs
+            td_target = rewards + self.config.discount * min_q * ~batch["next.done"]
+
+        # 3- compute predicted qs
+        q_preds = self.critic_forward(observations, actions, use_target=False)
+
+        # 4- Calculate loss
+        # Compute state-action value loss (TD loss) for all of the Q functions in the ensemble.
+        td_target_duplicate = einops.repeat(td_target, "b -> e b", e=q_preds.shape[0])
+        # You compute the mean loss of the batch for each critic and then to compute the final loss you sum them up
+        critics_loss = (
+            F.mse_loss(
+                input=q_preds,
+                target=td_target_duplicate,
+                reduction="none",
+            ).mean(1)
+        ).sum()
 
         info = {
             "td_target_mean": td_target.mean().item(),
             "td_target_max": td_target.max().item(),
-            "mean_q_predicts": current_q_values.mean().item(),
-            "min_q_predicts": current_q_values.min().item(),
-            "max_q_predicts": current_q_values.max().item(),
         }
 
         return critics_loss, info
 
     def compute_actor_loss(self, batch: dict[str, Tensor]) -> Tuple[Tensor, dict]:
         """Compute actor loss separately"""
+        batch = self.normalize_inputs(batch)
         observations = {k: batch[k][:, 0] for k in batch if k.startswith("observation.")}
         
-        # Get actions and log probs
-        actions_pi, log_probs_pi, _ = self.actor(observations)
-        
-        # Get Q values
-        qf_pi = self.critic_forward(observations, actions_pi, use_target=False)
-        min_qf_pi = qf_pi.min(dim=0)[0]
-        
-        # Actor loss
-        actor_loss = (self.temperature * log_probs_pi - min_qf_pi).mean()
+        temperature = self.temperature
+        actions, log_probs, _ = self.actor(observations)
+        with torch.inference_mode():
+            q_preds = self.critic_forward(observations, actions, use_target=False)
+        min_q_preds = q_preds.min(dim=0)[0]
+
+        actor_loss = ((temperature * log_probs) - min_q_preds).mean()
 
         info = {
-            "mean_log_probs": log_probs_pi.mean().item(),
-            "min_log_probs": log_probs_pi.min().item(),
-            "max_log_probs": log_probs_pi.max().item(),
-            "action_mean": actions_pi.mean().item(),
-            "entropy": -log_probs_pi.mean().item(),
+            "mean_log_probs": log_probs.mean().item(),
+            "min_log_probs": log_probs.min().item(),
+            "max_log_probs": log_probs.max().item(),
+            "action_mean": actions.mean().item(),
+            "entropy": log_probs.mean().item(),
+            "temperature": self.temperature,
         }
 
         return actor_loss, info
 
     def compute_temperature_loss(self, batch: dict[str, Tensor]) -> Tuple[Tensor, dict]:
         """Compute temperature loss separately"""
+        batch = self.normalize_inputs(batch)
         observations = {k: batch[k][:, 0] for k in batch if k.startswith("observation.")}
         
-        # Get log probs from current policy
-        _, log_probs_pi, _ = self.actor(observations)
-        
-        # Temperature loss
-        temperature_loss = (-self.log_alpha.exp() * 
-                          (log_probs_pi + self.config.target_entropy).detach()).mean()
+        # calculate temperature loss
+        with torch.no_grad():
+            _, log_probs, _ = self.actor(observations)
+        temperature_loss = (-self.log_alpha.exp() * (log_probs + self.config.target_entropy)).mean()
 
-        info = {
-            "temperature": self.temperature,
-        }
+        info = {}
 
         return temperature_loss, info
 
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor | float]:
         """Combined forward for all losses"""
-        self.temperature = self.log_alpha.exp().item()
-        batch = self.normalize_inputs(batch)
         
         critics_loss, critic_info = self.compute_critic_loss(batch)
         actor_loss, actor_info = self.compute_actor_loss(batch)
         temp_loss, temp_info = self.compute_temperature_loss(batch)
+    
+        self.temperature = self.log_alpha.exp().item()
         
         return {
             "critics_loss": critics_loss,
@@ -378,7 +387,7 @@ class MLP(nn.Module):
         # Add activation after first layer
         if dropout_rate is not None and dropout_rate > 0:
             layers.append(nn.Dropout(p=dropout_rate))
-        # layers.append(nn.LayerNorm(hidden_dims[0]))
+        layers.append(nn.LayerNorm(hidden_dims[0]))
         layers.append(activations if isinstance(activations, nn.Module) else getattr(nn, activations)())
 
         # Rest of the layers
@@ -388,7 +397,7 @@ class MLP(nn.Module):
             if i + 1 < len(hidden_dims) or activate_final:
                 if dropout_rate is not None and dropout_rate > 0:
                     layers.append(nn.Dropout(p=dropout_rate))
-                # layers.append(nn.LayerNorm(hidden_dims[i]))
+                layers.append(nn.LayerNorm(hidden_dims[i]))
                 layers.append(
                     activations if isinstance(activations, nn.Module) else getattr(nn, activations)()
                 )
@@ -422,11 +431,11 @@ class Critic(nn.Module):
         # Output layer
         if init_final is not None:
             self.output_layer = nn.Linear(out_features, 1)
-            # nn.init.uniform_(self.output_layer.weight, -init_final, init_final)
-            # nn.init.uniform_(self.output_layer.bias, -init_final, init_final)
+            nn.init.uniform_(self.output_layer.weight, -init_final, init_final)
+            nn.init.uniform_(self.output_layer.bias, -init_final, init_final)
         else:
             self.output_layer = nn.Linear(out_features, 1)
-            # orthogonal_init()(self.output_layer.weight)
+            orthogonal_init()(self.output_layer.weight)
 
         self.to(self.device)
 
@@ -440,7 +449,6 @@ class Critic(nn.Module):
         actions = actions.to(self.device)
 
         obs_enc = observations if self.encoder is None else self.encoder(observations)
-        obs_enc = obs_enc["observation.state"]
 
         inputs = torch.cat([obs_enc, actions], dim=-1)
         x = self.network(inputs)
@@ -479,20 +487,20 @@ class Policy(nn.Module):
 
         # Mean layer
         self.mean_layer = nn.Linear(out_features, action_dim)
-        # if init_final is not None:
-        #     nn.init.uniform_(self.mean_layer.weight, -init_final, init_final)
-        #     nn.init.uniform_(self.mean_layer.bias, -init_final, init_final)
-        # else:
-        #     orthogonal_init()(self.mean_layer.weight)
+        if init_final is not None:
+            nn.init.uniform_(self.mean_layer.weight, -init_final, init_final)
+            nn.init.uniform_(self.mean_layer.bias, -init_final, init_final)
+        else:
+            orthogonal_init()(self.mean_layer.weight)
 
         # Standard deviation layer or parameter
         if fixed_std is None:
             self.std_layer = nn.Linear(out_features, action_dim)
-            # if init_final is not None:
-            #     nn.init.uniform_(self.std_layer.weight, -init_final, init_final)
-            #     nn.init.uniform_(self.std_layer.bias, -init_final, init_final)
-            # else:
-            #     orthogonal_init()(self.std_layer.weight)
+            if init_final is not None:
+                nn.init.uniform_(self.std_layer.weight, -init_final, init_final)
+                nn.init.uniform_(self.std_layer.bias, -init_final, init_final)
+            else:
+                orthogonal_init()(self.std_layer.weight)
 
         self.to(self.device)
 
@@ -501,10 +509,7 @@ class Policy(nn.Module):
         observations: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Encode observations if encoder exists
-        if  isinstance(observations, dict):
-            obs_enc = observations["observation.state"] if self.encoder is None else self.encoder(observations)
-        else:
-            obs_enc = observations if self.encoder is None else self.encoder(observations)
+        obs_enc = observations if self.encoder is None else self.encoder(observations)
 
         # Get network outputs
         outputs = self.network(obs_enc)
@@ -583,18 +588,31 @@ class SACObservationEncoder(nn.Module):
                     nn.Tanh(),
                 )
             )
-        if "observation.state" in config.input_shapes:
-            self.state_enc_layers = nn.Sequential(
-                nn.Linear(config.input_shapes["observation.state"][0], config.latent_dim),
-                nn.LayerNorm(config.latent_dim),
-                nn.Tanh(),
-            )
-        if "observation.environment_state" in config.input_shapes:
-            self.env_state_enc_layers = nn.Sequential(
-                nn.Linear(config.input_shapes["observation.environment_state"][0], config.latent_dim),
-                nn.LayerNorm(config.latent_dim),
-                nn.Tanh(),
-            )
+        # if "observation.state" in config.input_shapes:
+        #     self.state_enc_layers = nn.Sequential(
+        #         nn.Linear(config.input_shapes["observation.state"][0], config.latent_dim),
+        #         nn.LayerNorm(config.latent_dim),
+        #         nn.Tanh(),
+        #     )
+        # if "observation.environment_state" in config.input_shapes:
+        #     self.env_state_enc_layers = nn.Sequential(
+        #         nn.Linear(config.input_shapes["observation.environment_state"][0], config.latent_dim),
+        #         nn.LayerNorm(config.latent_dim),
+        #         nn.Tanh(),
+        #     )
+        
+        # For state and environment_state, we'll use them directly without encoding
+        self.has_env_state = "observation.environment_state" in config.input_shapes
+        self.has_state = "observation.state" in config.input_shapes
+        
+        # Calculate total output dimension
+        self.total_dim = 0
+        if "observation.image" in config.input_shapes:
+            self.total_dim += config.latent_dim
+        if self.has_env_state:
+            self.total_dim += config.input_shapes["observation.environment_state"][0]
+        if self.has_state:
+            self.total_dim += config.input_shapes["observation.state"][0]
 
     def forward(self, obs_dict: dict[str, Tensor]) -> Tensor:
         """Encode the image and/or state vector.
@@ -602,22 +620,40 @@ class SACObservationEncoder(nn.Module):
         Each modality is encoded into a feature vector of size (latent_dim,) and then a uniform mean is taken
         over all features.
         """
-        feat = []
-        # Concatenate all images along the channel dimension.
+        # feat = []
+        # # Concatenate all images along the channel dimension.
+        # image_keys = [k for k in self.config.input_shapes if k.startswith("observation.image")]
+        # for image_key in image_keys:
+        #     feat.append(flatten_forward_unflatten(self.image_enc_layers, obs_dict[image_key]))
+        # if "observation.environment_state" in self.config.input_shapes:
+        #     feat.append(self.env_state_enc_layers(obs_dict["observation.environment_state"]))
+        # if "observation.state" in self.config.input_shapes:
+        #     feat.append(self.state_enc_layers(obs_dict["observation.state"]))
+        # # TODO(ke-wang): currently average over all features, concatenate all features maybe a better way
+        # return torch.stack(feat, dim=0).mean(0)
+
+        features = []
+        
+        # Handle images if present
         image_keys = [k for k in self.config.input_shapes if k.startswith("observation.image")]
         for image_key in image_keys:
-            feat.append(flatten_forward_unflatten(self.image_enc_layers, obs_dict[image_key]))
-        if "observation.environment_state" in self.config.input_shapes:
-            feat.append(self.env_state_enc_layers(obs_dict["observation.environment_state"]))
-        if "observation.state" in self.config.input_shapes:
-            feat.append(self.state_enc_layers(obs_dict["observation.state"]))
-        # TODO(ke-wang): currently average over all features, concatenate all features maybe a better way
-        return torch.stack(feat, dim=0).mean(0)
+            features.append(flatten_forward_unflatten(self.image_enc_layers, obs_dict[image_key]))
+            
+        # Add raw environment state
+        if self.has_env_state:
+            features.append(obs_dict["observation.environment_state"])
+            
+        # Add raw state
+        if self.has_state:
+            features.append(obs_dict["observation.state"])
+        
+        # Concatenate all features
+        return torch.cat(features, dim=-1)
 
     @property
     def output_dim(self) -> int:
         """Returns the dimension of the encoder output"""
-        return self.config.latent_dim
+        return self.total_dim
 
 
 def orthogonal_init():
