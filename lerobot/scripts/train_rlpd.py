@@ -484,67 +484,90 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
                 grad_scaler.update()
 
                 # Delayed policy updates
-                if step % cfg.policy.update_frequency == 0:
-                    with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                        actor_loss, actor_info = policy.compute_actor_loss(batch)
-                    
-                    actor_optimizer.zero_grad()
-                    grad_scaler.scale(actor_loss).backward()
-                    grad_scaler.unscale_(actor_optimizer)
+                # if step % cfg.policy.update_frequency == 0:
 
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        policy.actor.parameters(),
-                        cfg.training.grad_clip_norm,
-                        error_if_nonfinite=False,
-                    )
 
-                    grad_scaler.step(actor_optimizer)
-                    grad_scaler.update()
+            start_time = time.perf_counter()
+            batch = next(dl_iter)
+            dataloading_s = time.perf_counter() - start_time
 
-                    with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                        temperature_loss, temp_info = policy.compute_temperature_loss(actor_info["entropy"].detach())
+            for key in batch:
+                batch[key] = batch[key].to(cfg.device, non_blocking=True)
 
-                    temperature_optimizer.zero_grad()
-                    grad_scaler.scale(temperature_loss).backward()
-                    grad_scaler.unscale_(temperature_optimizer)
-
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        policy.log_alpha.exp(),
-                        cfg.training.grad_clip_norm,
-                        error_if_nonfinite=False,
-                    )
-
-                    grad_scaler.step(temperature_optimizer)
-                    grad_scaler.update()
-
-                    policy.temperature = policy.log_alpha.exp().item()
+            # TODO (lilkm): put this in a policy_update() function 
+            # Update critics
+            with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
+                critics_loss, critics_info = policy.compute_critic_loss(batch)
                 
-                # policy.update()  # Update target networks
+            critic_optimizer.zero_grad()
+            grad_scaler.scale(critics_loss).backward()
+            grad_scaler.unscale_(critic_optimizer)
+            
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                policy.critic_ensemble.parameters(),
+                cfg.training.grad_clip_norm,
+                error_if_nonfinite=False,
+            )
+            
+            grad_scaler.step(critic_optimizer)
+            grad_scaler.update()
 
-                train_info = {
-                        "loss": critics_loss.item() + actor_loss.item(),
-                        "critic_loss": critics_loss.item(),
-                        "actor_loss": actor_loss.item(),
-                        "temperature": policy.temperature,
-                        "grad_norm": float(grad_norm),
-                        "lr": cfg.training.lr,
-                        "update_s": time.perf_counter() - start_time,
-                    }
+            with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
+                actor_loss, actor_info = policy.compute_actor_loss(batch)
+            
+            actor_optimizer.zero_grad()
+            grad_scaler.scale(actor_loss).backward()
+            grad_scaler.unscale_(actor_optimizer)
 
-                train_info["dataloading_s"] = dataloading_s
-                train_info["online_rollout_s"] = online_rollout_s
-                train_info["update_online_buffer_s"] = update_online_buffer_s
-                train_info["await_update_online_buffer_s"] = await_update_online_buffer_s
-                train_info["online_buffer_size"] = len(online_dataset)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                policy.actor.parameters(),
+                cfg.training.grad_clip_norm,
+                error_if_nonfinite=False,
+            )
 
-                if step % cfg.training.log_freq == 0:
-                    log_train_info(logger, train_info, step, cfg, online_dataset, is_online=True)
+            grad_scaler.step(actor_optimizer)
+            grad_scaler.update()
 
-                # Note: evaluate_and_checkpoint_if_needed happens **after** the `step`th training update has completed,
-                # so we pass in step + 1.
-                evaluate_and_checkpoint_if_needed(step + 1, is_online=True)
+            with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
+                temperature_loss, temp_info = policy.compute_temperature_loss(actor_info["entropy"].detach())
 
-                step += 1
+            temperature_optimizer.zero_grad()
+            grad_scaler.scale(temperature_loss).backward()
+            grad_scaler.unscale_(temperature_optimizer)
+
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                policy.log_alpha,
+                cfg.training.grad_clip_norm,
+                error_if_nonfinite=False,
+            )
+
+            grad_scaler.step(temperature_optimizer)
+            grad_scaler.update()
+
+            train_info = {
+                    "loss": critics_loss.item() + actor_loss.item(),
+                    "critic_loss": critics_loss.item(),
+                    "actor_loss": actor_loss.item(),
+                    "temperature": policy.temperature,
+                    "grad_norm": float(grad_norm),
+                    "lr": cfg.training.lr,
+                    "update_s": time.perf_counter() - start_time,
+                }
+
+            train_info["dataloading_s"] = dataloading_s
+            train_info["online_rollout_s"] = online_rollout_s
+            train_info["update_online_buffer_s"] = update_online_buffer_s
+            train_info["await_update_online_buffer_s"] = await_update_online_buffer_s
+            train_info["online_buffer_size"] = len(online_dataset)
+
+            if step % cfg.training.log_freq == 0:
+                log_train_info(logger, train_info, step, cfg, online_dataset, is_online=True)
+
+            # Note: evaluate_and_checkpoint_if_needed happens **after** the `step`th training update has completed,
+            # so we pass in step + 1.
+            evaluate_and_checkpoint_if_needed(step + 1, is_online=True)
+
+            step += 1
         online_step += 1
 
         if online_step >= cfg.training.online_steps:

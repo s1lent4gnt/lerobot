@@ -237,6 +237,7 @@ class SACPolicy(
     def compute_temperature_loss(self, entropy: Tensor) -> Tuple[Tensor, dict]:
         """Compute temperature loss separately"""
         temperature_loss = (-self.log_alpha.exp() * (entropy + self.config.target_entropy)).mean()
+        self.temperature = self.log_alpha.exp().item()
 
         info = {}
 
