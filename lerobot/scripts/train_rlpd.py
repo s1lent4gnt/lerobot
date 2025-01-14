@@ -50,7 +50,8 @@ from lerobot.common.utils.utils import (
     init_logging,
     set_global_seed,
 )
-from lerobot.scripts.eval import eval_policy
+from lerobot.scripts.eval import eval_policy, _compile_single_transition_data
+from lerobot.common.envs.utils import preprocess_observation
 
 
 def log_train_info(logger: Logger, info, step, cfg, dataset, is_online):
@@ -317,10 +318,6 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
         delta_timestamps=cfg.training.delta_timestamps,
     )
 
-    # If we are doing online rollouts asynchronously, deepcopy the policy to use for online rollouts (this
-    # makes it possible to do online rollouts in parallel with training updates).
-    online_rollout_policy = deepcopy(policy) if cfg.training.do_online_rollout_async else policy
-
     # Create dataloader for online training.
     concat_dataset = torch.utils.data.ConcatDataset([offline_dataset, online_dataset])
     sampler_weights = compute_sampler_weights(
@@ -329,7 +326,7 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
         online_dataset=online_dataset,
         # +1 because online rollouts return an extra frame for the "final observation". Note: we don't have
         # this final observation in the offline datasets, but we might add them in future.
-        online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0) + 1,
+        online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
         online_sampling_ratio=cfg.training.online_sampling_ratio,
     )
     sampler = torch.utils.data.WeightedRandomSampler(
@@ -347,13 +344,6 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     )
     dl_iter = cycle(dataloader)
 
-    # Lock and thread pool executor for asynchronous online rollouts. When asynchronous mode is disabled,
-    # these are still used but effectively do nothing.
-    lock = Lock()
-    # Note: 1 worker because we only ever want to run one set of online rollouts at a time. Batch
-    # parallelization of rollouts is handled within the job.
-    executor = ThreadPoolExecutor(max_workers=1)
-
     online_step = 0
     online_rollout_s = 0  # time take to do online rollout
     update_online_buffer_s = 0  # time taken to update the online buffer with the online rollout data
@@ -362,171 +352,200 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     await_update_online_buffer_s = 0
     rollout_start_seed = cfg.training.online_env_seed
 
+    obs, _ = online_env.reset(seed=cfg.seed)
+    max_steps = online_env.call("_max_episode_steps")[0]
+    episode_return = 0
+    episode_length = 0
+    done = False
+    current_episode = 0
 
     while True:
+
+        # Preprocess observation
+        obs = preprocess_observation(obs)
+
         if online_step == cfg.training.online_steps:
             break
 
         if online_step == 0:
             logging.info("Start online training by interacting with environment")
 
-        def sample_trajectory_and_update_buffer():
-            nonlocal rollout_start_seed
-            with lock:
-                online_rollout_policy.load_state_dict(policy.state_dict())
-            online_rollout_policy.eval()
-            start_rollout_time = time.perf_counter()
-            with torch.no_grad():
-                eval_info = eval_policy(
-                    online_env,
-                    online_rollout_policy,
-                    n_episodes=cfg.training.online_rollout_n_episodes,
-                    max_episodes_rendered=min(10, cfg.training.online_rollout_n_episodes),
-                    videos_dir=logger.log_dir / "online_rollout_videos",
-                    return_episode_data=True,
-                    start_seed=(
-                        rollout_start_seed := (rollout_start_seed + cfg.training.batch_size) % 1000000
-                    ),
-                )
-            online_rollout_s = time.perf_counter() - start_rollout_time
+        if online_step < cfg.training.online_learning_start:
+            actions = np.array([online_env.single_action_space.sample() for _ in range(online_env.num_envs)])
+        else:
+            actions = policy.select_action(obs)
+            actions = actions.detach().cpu().numpy()
 
-            with lock:
-                start_update_buffer_time = time.perf_counter()
-                online_dataset.add_data(eval_info["episodes"])
+        # TODO (lilkm): wrap it in a function
+        # Take a single step
+        next_obs, reward, terminated, truncated, info = online_env.step(actions)
 
-                # Update the concatenated dataset length used during sampling.
-                concat_dataset.cumulative_sizes = concat_dataset.cumsum(concat_dataset.datasets)
+        # Handle success info
+        if "final_info" in info:
+            successes = [info["is_success"] if info is not None else False for info in info["final_info"]]
+        else:
+            successes = [False] * online_env.num_envs
 
-                # Update the sampling weights.
-                sampler.weights = compute_sampler_weights(
-                    offline_dataset,
-                    offline_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
-                    online_dataset=online_dataset,
-                    # +1 because online rollouts return an extra frame for the "final observation". Note: we don't have
-                    # this final observation in the offline datasets, but we might add them in future.
-                    online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0) + 1,
-                    online_sampling_ratio=cfg.training.online_sampling_ratio,
-                )
-                sampler.num_frames = len(concat_dataset)
+        # Process done flags
+        done = terminated | truncated
 
-                update_online_buffer_s = time.perf_counter() - start_update_buffer_time
+        # Prepare return dictionary with single-step data
+        transition_data = {
+            "observation": {
+                key: torch.stack([
+                    obs[key]
+                ], dim=1) for key in obs
+            },
+            "action": torch.from_numpy(actions),  # Add sequence dim
+            "reward": torch.from_numpy(reward),
+            "success": torch.tensor(successes),
+            "done": torch.from_numpy(done)
+        }
 
-            return online_rollout_s, update_online_buffer_s
+        # Update observation and episode stats
+        obs = next_obs.copy()
+        episode_return += reward.mean().item()
 
-        future = executor.submit(sample_trajectory_and_update_buffer)
-        # If we aren't doing async rollouts, or if we haven't yet gotten enough examples in our buffer, wait
-        # here until the rollout and buffer update is done, before proceeding to the policy update steps.
-        if (
-            not cfg.training.do_online_rollout_async
-            or len(online_dataset) <= cfg.training.online_buffer_seed_size
-        ):
-            online_rollout_s, update_online_buffer_s = future.result()
+        # Get key transition elements and handle timeout
+        next_obs = {k: v[:, -1] for k, v in transition_data["observation"].items()}
+        reward = transition_data["reward"]
+        done = transition_data["done"]
 
-        if len(online_dataset) <= cfg.training.online_buffer_seed_size:
-            logging.info(
-                f"Seeding online buffer: {len(online_dataset)}/{cfg.training.online_buffer_seed_size}"
-            )
-            continue
+        episode_length += 1
+        done = done & (episode_length != max_steps)
 
-        policy.train()
-        for _ in range(cfg.training.online_steps_between_rollouts): # UTD
-            with lock:
+        # Store modified transition
+        modified_transition_data = {
+            **transition_data,
+            "done": done
+        }
+        
+        processed_data = _compile_single_transition_data(
+            transition_data=modified_transition_data,
+            env_indices=list(range(online_env.num_envs)),
+            start_episode_index=current_episode,
+            start_data_index=step
+        )
+        
+        online_dataset.add_data(processed_data)
+
+        start_update_buffer_time = time.perf_counter()
+
+        # Update dataset and sampling
+        concat_dataset.cumulative_sizes = concat_dataset.cumsum(concat_dataset.datasets)
+        sampler.weights = compute_sampler_weights(
+            offline_dataset,
+            offline_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
+            online_dataset=online_dataset,
+            online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
+            online_sampling_ratio=cfg.training.online_sampling_ratio,
+        )
+        sampler.num_frames = len(concat_dataset)
+
+        update_online_buffer_s = time.perf_counter() - start_update_buffer_time
+        
+        # Handle episode termination
+        if done or (episode_length == max_steps):
+            # TODO(lilkm): do logging here
+            # episode_return and episode_length
+            
+            obs, _ = online_env.reset(seed=cfg.seed)
+            episode_return = 0
+            episode_length = 0
+            done = False
+            current_episode += 1
+
+        if online_step > cfg.training.online_learning_start:
+            policy.train()
+            for _ in range(cfg.training.online_steps_between_rollouts): # UTD
                 start_time = time.perf_counter()
                 batch = next(dl_iter)
                 dataloading_s = time.perf_counter() - start_time
 
-            for key in batch:
-                batch[key] = batch[key].to(cfg.device, non_blocking=True)
+                for key in batch:
+                    batch[key] = batch[key].to(cfg.device, non_blocking=True)
 
-            # TODO (lilkm): put this in a policy_update() function 
-            # Update critics
-            with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                critics_loss, critics_info = policy.compute_critic_loss(batch)
-                
-            critic_optimizer.zero_grad()
-            grad_scaler.scale(critics_loss).backward()
-            grad_scaler.unscale_(critic_optimizer)
-            
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                policy.critic_ensemble.parameters(),
-                cfg.training.grad_clip_norm,
-                error_if_nonfinite=False,
-            )
-            
-            grad_scaler.step(critic_optimizer)
-            grad_scaler.update()
-
-            # Delayed policy updates
-            if step % cfg.policy.update_frequency == 0:
+                # TODO (lilkm): put this in a policy_update() function 
+                # Update critics
                 with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                    actor_loss, actor_info = policy.compute_actor_loss(batch)
+                    critics_loss, critics_info = policy.compute_critic_loss(batch)
+                    
+                critic_optimizer.zero_grad()
+                grad_scaler.scale(critics_loss).backward()
+                grad_scaler.unscale_(critic_optimizer)
                 
-                actor_optimizer.zero_grad()
-                grad_scaler.scale(actor_loss).backward()
-                grad_scaler.unscale_(actor_optimizer)
-
                 grad_norm = torch.nn.utils.clip_grad_norm_(
-                    policy.actor.parameters(),
+                    policy.critic_ensemble.parameters(),
                     cfg.training.grad_clip_norm,
                     error_if_nonfinite=False,
                 )
-
-                grad_scaler.step(actor_optimizer)
+                
+                grad_scaler.step(critic_optimizer)
                 grad_scaler.update()
 
-                with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                    temperature_loss, temp_info = policy.compute_temperature_loss(batch)
+                # Delayed policy updates
+                if step % cfg.policy.update_frequency == 0:
+                    with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
+                        actor_loss, actor_info = policy.compute_actor_loss(batch)
+                    
+                    actor_optimizer.zero_grad()
+                    grad_scaler.scale(actor_loss).backward()
+                    grad_scaler.unscale_(actor_optimizer)
 
-                temperature_optimizer.zero_grad()
-                grad_scaler.scale(temperature_loss).backward()
-                grad_scaler.unscale_(temperature_optimizer)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        policy.actor.parameters(),
+                        cfg.training.grad_clip_norm,
+                        error_if_nonfinite=False,
+                    )
 
-                # grad_norm = torch.nn.utils.clip_grad_norm_(
-                #     policy.log_alpha.exp(),
-                #     cfg.training.grad_clip_norm,
-                #     error_if_nonfinite=False,
-                # )
+                    grad_scaler.step(actor_optimizer)
+                    grad_scaler.update()
 
-                grad_scaler.step(temperature_optimizer)
-                grad_scaler.update()
+                    with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
+                        temperature_loss, temp_info = policy.compute_temperature_loss(actor_info["entropy"].detach())
 
-                policy.temperature = policy.log_alpha.exp().item()
-            
-            policy.update()  # Update target networks
+                    temperature_optimizer.zero_grad()
+                    grad_scaler.scale(temperature_loss).backward()
+                    grad_scaler.unscale_(temperature_optimizer)
 
-            train_info = {
-                    "loss": critics_loss.item() + actor_loss.item(),
-                    "critic_loss": critics_loss.item(),
-                    "actor_loss": actor_loss.item(),
-                    "temperature": policy.temperature,
-                    "grad_norm": float(grad_norm),
-                    "lr": cfg.training.lr,
-                    "update_s": time.perf_counter() - start_time,
-                }
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        policy.log_alpha.exp(),
+                        cfg.training.grad_clip_norm,
+                        error_if_nonfinite=False,
+                    )
 
-            train_info["dataloading_s"] = dataloading_s
-            train_info["online_rollout_s"] = online_rollout_s
-            train_info["update_online_buffer_s"] = update_online_buffer_s
-            train_info["await_update_online_buffer_s"] = await_update_online_buffer_s
-            with lock:
+                    grad_scaler.step(temperature_optimizer)
+                    grad_scaler.update()
+
+                    policy.temperature = policy.log_alpha.exp().item()
+                
+                # policy.update()  # Update target networks
+
+                train_info = {
+                        "loss": critics_loss.item() + actor_loss.item(),
+                        "critic_loss": critics_loss.item(),
+                        "actor_loss": actor_loss.item(),
+                        "temperature": policy.temperature,
+                        "grad_norm": float(grad_norm),
+                        "lr": cfg.training.lr,
+                        "update_s": time.perf_counter() - start_time,
+                    }
+
+                train_info["dataloading_s"] = dataloading_s
+                train_info["online_rollout_s"] = online_rollout_s
+                train_info["update_online_buffer_s"] = update_online_buffer_s
+                train_info["await_update_online_buffer_s"] = await_update_online_buffer_s
                 train_info["online_buffer_size"] = len(online_dataset)
 
-            if step % cfg.training.log_freq == 0:
-                log_train_info(logger, train_info, step, cfg, online_dataset, is_online=True)
+                if step % cfg.training.log_freq == 0:
+                    log_train_info(logger, train_info, step, cfg, online_dataset, is_online=True)
 
-            # Note: evaluate_and_checkpoint_if_needed happens **after** the `step`th training update has completed,
-            # so we pass in step + 1.
-            evaluate_and_checkpoint_if_needed(step + 1, is_online=True)
+                # Note: evaluate_and_checkpoint_if_needed happens **after** the `step`th training update has completed,
+                # so we pass in step + 1.
+                evaluate_and_checkpoint_if_needed(step + 1, is_online=True)
 
-            step += 1
-            online_step += 1
-
-        # If we're doing async rollouts, we should now wait until we've completed them before proceeding
-        # to do the next batch of rollouts.
-        if future.running():
-            start = time.perf_counter()
-            online_rollout_s, update_online_buffer_s = future.result()
-            await_update_online_buffer_s = time.perf_counter() - start
+                step += 1
+        online_step += 1
 
         if online_step >= cfg.training.online_steps:
             break

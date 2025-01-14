@@ -194,6 +194,15 @@ class SACPolicy(
             ).mean(1)
         ).sum()
 
+        # 5- Update target networks with exponential moving average
+        with torch.no_grad():
+            for target_critic, critic in zip(self.critic_target, self.critic_ensemble, strict=False):
+                for target_param, param in zip(target_critic.parameters(), critic.parameters(), strict=False):
+                    target_param.data.copy_(
+                        param.data * self.config.critic_target_update_weight
+                        + target_param.data * (1.0 - self.config.critic_target_update_weight)
+                    )
+
         info = {
             "td_target_mean": td_target.mean().item(),
             "td_target_max": td_target.max().item(),
@@ -219,21 +228,15 @@ class SACPolicy(
             "min_log_probs": log_probs.min().item(),
             "max_log_probs": log_probs.max().item(),
             "action_mean": actions.mean().item(),
-            "entropy": log_probs.mean().item(),
+            "entropy": log_probs,
             "temperature": self.temperature,
         }
 
         return actor_loss, info
 
-    def compute_temperature_loss(self, batch: dict[str, Tensor]) -> Tuple[Tensor, dict]:
+    def compute_temperature_loss(self, entropy: Tensor) -> Tuple[Tensor, dict]:
         """Compute temperature loss separately"""
-        batch = self.normalize_inputs(batch)
-        observations = {k: batch[k][:, 0] for k in batch if k.startswith("observation.")}
-        
-        # calculate temperature loss
-        with torch.no_grad():
-            _, log_probs, _ = self.actor(observations)
-        temperature_loss = (-self.log_alpha.exp() * (log_probs + self.config.target_entropy)).mean()
+        temperature_loss = (-self.log_alpha.exp() * (entropy + self.config.target_entropy)).mean()
 
         info = {}
 
@@ -557,12 +560,13 @@ class SACObservationEncoder(nn.Module):
     TODO(ke-wang): The original work allows for (1) stacking multiple history frames and (2) using pretrained resnet encoders.
     """
 
-    def __init__(self, config: SACConfig):
+    def __init__(self, config: SACConfig, device="cuda"):
         """
         Creates encoders for pixel and/or state modalities.
         """
         super().__init__()
         self.config = config
+        self.device = device
 
         if "observation.image" in config.input_shapes:
             self.image_enc_layers = nn.Sequential(
@@ -576,7 +580,7 @@ class SACObservationEncoder(nn.Module):
                 nn.ReLU(),
                 nn.Conv2d(config.image_encoder_hidden_dim, config.image_encoder_hidden_dim, 3, stride=2),
                 nn.ReLU(),
-            )
+            ).to(self.device)
             dummy_batch = torch.zeros(1, *config.input_shapes["observation.image"])
             with torch.inference_mode():
                 out_shape = self.image_enc_layers(dummy_batch).shape[1:]
@@ -586,7 +590,7 @@ class SACObservationEncoder(nn.Module):
                     nn.Linear(np.prod(out_shape), config.latent_dim),
                     nn.LayerNorm(config.latent_dim),
                     nn.Tanh(),
-                )
+                ).to(self.device)
             )
         # if "observation.state" in config.input_shapes:
         #     self.state_enc_layers = nn.Sequential(
@@ -637,15 +641,15 @@ class SACObservationEncoder(nn.Module):
         # Handle images if present
         image_keys = [k for k in self.config.input_shapes if k.startswith("observation.image")]
         for image_key in image_keys:
-            features.append(flatten_forward_unflatten(self.image_enc_layers, obs_dict[image_key]))
+            features.append(flatten_forward_unflatten(self.image_enc_layers, obs_dict[image_key].to(self.device)))
             
         # Add raw environment state
         if self.has_env_state:
-            features.append(obs_dict["observation.environment_state"])
+            features.append(obs_dict["observation.environment_state"].to(self.device))
             
         # Add raw state
         if self.has_state:
-            features.append(obs_dict["observation.state"])
+            features.append(obs_dict["observation.state"].to(self.device))
         
         # Concatenate all features
         return torch.cat(features, dim=-1)

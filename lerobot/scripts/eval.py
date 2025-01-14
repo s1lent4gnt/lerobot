@@ -397,6 +397,49 @@ def eval_policy(
     return info
 
 
+def _compile_single_transition_data(
+    transition_data: dict, env_indices: list[int], start_episode_index: int, start_data_index: int
+) -> dict:
+    """Convenience function for processing single transition data.
+    
+    Args:
+        transition_data: Dictionary containing single-step data for multiple parallel envs
+        env_indices: List of environment indices to process
+        start_episode_index: Starting index for episode numbering
+        start_data_index: Starting index for frame numbering
+    """
+    data_dict = {}
+    
+    # Process each environment's transition
+    transition_dicts = []
+    for i, env_idx in enumerate(env_indices):
+        transition_dict = {
+            "action": transition_data["action"][env_idx:env_idx+1],  # Keep batch dimension
+            "episode_index": torch.tensor([i]),  # Use i instead of start_episode_index + env_idx
+            "frame_index": torch.tensor([0]),  # Single frame
+            "timestamp": torch.tensor([0.0]),  # First timestamp
+            "next.done": transition_data["done"][env_idx:env_idx+1],
+            "next.success": transition_data["success"][env_idx:env_idx+1],
+            "next.reward": transition_data["reward"][env_idx:env_idx+1].type(torch.float32),
+        }
+
+        # Add observation data
+        for key in transition_data["observation"]:
+            transition_dict[key] = transition_data["observation"][key][env_idx:env_idx+1]
+
+        transition_dicts.append(transition_dict)
+
+    # Combine all transitions
+    for key in transition_dicts[0]:
+        data_dict[key] = torch.cat([x[key] for x in transition_dicts])
+
+    # Add sequential indices
+    num_transitions = len(env_indices)
+    data_dict["index"] = torch.arange(0, num_transitions, 1)  # Start from 0
+
+    return data_dict
+
+
 def _compile_episode_data(
     rollout_data: dict, done_indices: Tensor, start_episode_index: int, start_data_index: int, fps: float
 ) -> dict:
