@@ -29,9 +29,7 @@ from deepdiff import DeepDiff
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from termcolor import colored
 from torch import nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, ConcatDataset
-from torch.amp import GradScaler
+from torch.cuda.amp import GradScaler
 
 from lerobot.common.datasets.factory import make_dataset, resolve_delta_timestamps
 from lerobot.common.datasets.lerobot_dataset import MultiLeRobotDataset
@@ -50,8 +48,130 @@ from lerobot.common.utils.utils import (
     init_logging,
     set_global_seed,
 )
-from lerobot.scripts.eval import eval_policy, _compile_single_transition_data
-from lerobot.common.envs.utils import preprocess_observation
+from lerobot.scripts.eval import eval_policy
+
+import torch.optim as optim
+
+def make_optimizer_and_scheduler(cfg, policy):
+    if cfg.policy.name == "act":
+        optimizer_params_dicts = [
+            {
+                "params": [
+                    p
+                    for n, p in policy.named_parameters()
+                    if not n.startswith("model.backbone") and p.requires_grad
+                ]
+            },
+            {
+                "params": [
+                    p
+                    for n, p in policy.named_parameters()
+                    if n.startswith("model.backbone") and p.requires_grad
+                ],
+                "lr": cfg.training.lr_backbone,
+            },
+        ]
+        optimizer = torch.optim.AdamW(
+            optimizer_params_dicts, lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
+        )
+        lr_scheduler = None
+    elif cfg.policy.name == "diffusion":
+        optimizer = torch.optim.Adam(
+            policy.diffusion.parameters(),
+            cfg.training.lr,
+            cfg.training.adam_betas,
+            cfg.training.adam_eps,
+            cfg.training.adam_weight_decay,
+        )
+        from diffusers.optimization import get_scheduler
+
+        lr_scheduler = get_scheduler(
+            cfg.training.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=cfg.training.lr_warmup_steps,
+            num_training_steps=cfg.training.offline_steps,
+        )
+    elif policy.name == "tdmpc":
+        optimizer = torch.optim.Adam(policy.parameters(), cfg.training.lr)
+        lr_scheduler = None
+
+    elif policy.name == "sac":
+        optimizer = torch.optim.Adam(
+            [
+                {"params": policy.actor.parameters(), "lr": policy.config.actor_lr},
+                {"params": policy.critic_ensemble.parameters(), "lr": policy.config.critic_lr},
+                # We wrap policy log temperature in list because this is a torch tensor and not a nn.Module
+                {"params": [policy.log_alpha], "lr": policy.config.temperature_lr},
+            ]
+        )
+        lr_scheduler = None
+
+    elif cfg.policy.name == "vqbet":
+        from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTOptimizer, VQBeTScheduler
+
+        optimizer = VQBeTOptimizer(policy, cfg)
+        lr_scheduler = VQBeTScheduler(optimizer, cfg)
+    else:
+        raise NotImplementedError()
+
+    return optimizer, lr_scheduler
+
+
+def update_policy(
+    policy,
+    batch,
+    optimizer,
+    grad_clip_norm,
+    grad_scaler: GradScaler,
+    lr_scheduler=None,
+    use_amp: bool = False,
+    lock=None,
+):
+    """Returns a dictionary of items for logging."""
+    start_time = time.perf_counter()
+    device = get_device_from_parameters(policy)
+    policy.train()
+    with torch.autocast(device_type=device.type) if use_amp else nullcontext():
+        output_dict = policy.forward(batch)
+        # TODO(rcadene): policy.unnormalize_outputs(out_dict)
+        loss = output_dict["loss"]
+    grad_scaler.scale(loss).backward()
+
+    # Unscale the graident of the optimzer's assigned params in-place **prior to gradient clipping**.
+    grad_scaler.unscale_(optimizer)
+
+    grad_norm = torch.nn.utils.clip_grad_norm_(
+        policy.parameters(),
+        grad_clip_norm,
+        error_if_nonfinite=False,
+    )
+
+    # Optimizer's gradients are already unscaled, so scaler.step does not unscale them,
+    # although it still skips optimizer.step() if the gradients contain infs or NaNs.
+    with lock if lock is not None else nullcontext():
+        grad_scaler.step(optimizer)
+    # Updates the scale for next iteration.
+    grad_scaler.update()
+
+    optimizer.zero_grad()
+
+    if lr_scheduler is not None:
+        lr_scheduler.step()
+
+    if isinstance(policy, PolicyWithUpdate):
+        # To possibly update an internal buffer (for instance an Exponential Moving Average like in TDMPC).
+        policy.update()
+
+    info = {
+        "loss": loss.item(),
+        "grad_norm": float(grad_norm),
+        "lr": optimizer.param_groups[0]["lr"],
+        "update_s": time.perf_counter() - start_time,
+        **{k: v for k, v in output_dict.items() if k != "loss"},
+    }
+    info.update({k: v for k, v in output_dict.items() if k not in info})
+
+    return info
 
 
 def log_train_info(logger: Logger, info, step, cfg, dataset, is_online):
@@ -92,6 +212,7 @@ def log_train_info(logger: Logger, info, step, cfg, dataset, is_online):
 
     logger.log_dict(info, step, mode="train")
 
+
 def log_eval_info(logger, info, step, cfg, dataset, is_online):
     eval_s = info["eval_s"]
     avg_sum_reward = info["avg_sum_reward"]
@@ -125,11 +246,70 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
 
     logger.log_dict(info, step, mode="eval")
 
-def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = None):
+
+def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = None):
     if out_dir is None:
         raise NotImplementedError()
     if job_name is None:
         raise NotImplementedError()
+
+    init_logging()
+    logging.info(pformat(OmegaConf.to_container(cfg)))
+
+    if cfg.training.online_steps > 0 and isinstance(cfg.dataset_repo_id, ListConfig):
+        raise NotImplementedError("Online training with LeRobotMultiDataset is not implemented.")
+
+    # If we are resuming a run, we need to check that a checkpoint exists in the log directory, and we need
+    # to check for any differences between the provided config and the checkpoint's config.
+    if cfg.resume:
+        if not Logger.get_last_checkpoint_dir(out_dir).exists():
+            raise RuntimeError(
+                "You have set resume=True, but there is no model checkpoint in "
+                f"{Logger.get_last_checkpoint_dir(out_dir)}"
+            )
+        checkpoint_cfg_path = str(Logger.get_last_pretrained_model_dir(out_dir) / "config.yaml")
+        logging.info(
+            colored(
+                "You have set resume=True, indicating that you wish to resume a run",
+                color="yellow",
+                attrs=["bold"],
+            )
+        )
+        # Get the configuration file from the last checkpoint.
+        checkpoint_cfg = init_hydra_config(checkpoint_cfg_path)
+        # Check for differences between the checkpoint configuration and provided configuration.
+        # Hack to resolve the delta_timestamps ahead of time in order to properly diff.
+        resolve_delta_timestamps(cfg)
+        diff = DeepDiff(OmegaConf.to_container(checkpoint_cfg), OmegaConf.to_container(cfg))
+        # Ignore the `resume` and parameters.
+        if "values_changed" in diff and "root['resume']" in diff["values_changed"]:
+            del diff["values_changed"]["root['resume']"]
+        # Log a warning about differences between the checkpoint configuration and the provided
+        # configuration.
+        if len(diff) > 0:
+            logging.warning(
+                "At least one difference was detected between the checkpoint configuration and "
+                f"the provided configuration: \n{pformat(diff)}\nNote that the checkpoint configuration "
+                "takes precedence.",
+            )
+        # Use the checkpoint config instead of the provided config (but keep `resume` parameter).
+        cfg = checkpoint_cfg
+        cfg.resume = True
+    elif Logger.get_last_checkpoint_dir(out_dir).exists():
+        raise RuntimeError(
+            f"The configured output directory {Logger.get_last_checkpoint_dir(out_dir)} already exists. If "
+            "you meant to resume training, please use `resume=true` in your command or yaml configuration."
+        )
+
+    if cfg.eval.batch_size > cfg.eval.n_episodes:
+        raise ValueError(
+            "The eval batch size is greater than the number of eval episodes "
+            f"({cfg.eval.batch_size} > {cfg.eval.n_episodes}). As a result, {cfg.eval.batch_size} "
+            f"eval environments will be instantiated, but only {cfg.eval.n_episodes} will be used. "
+            "This might significantly slow down evaluation. To fix this, you should update your command "
+            f"to increase the number of episodes to match the batch size (e.g. `eval.n_episodes={cfg.eval.batch_size}`), "
+            f"or lower the batch size (e.g. `eval.batch_size={cfg.eval.n_episodes}`)."
+        )
 
     # log metrics to terminal and wandb
     logger = Logger(cfg, out_dir, wandb_job_name=job_name)
@@ -142,9 +322,8 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    # Setup environment and datasets
     logging.info("make_dataset")
-    offline_dataset = make_dataset(cfg) if cfg.dataset_repo_id else None
+    offline_dataset = make_dataset(cfg)
     # TODO (michel-aractingi): temporary fix to avoid datasets with task_index key that doesn't exist in online environment
     # i.e., pusht
     if "task_index" in offline_dataset.hf_dataset[0]:
@@ -155,7 +334,7 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
             "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(offline_dataset.repo_id_to_index , indent=2)}"
         )
-    
+
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
@@ -171,8 +350,9 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
         pretrained_policy_name_or_path=str(logger.last_pretrained_model_dir) if cfg.resume else None,
     )
     assert isinstance(policy, nn.Module)
-    policy = policy.to(device)
-
+    # Create optimizer and scheduler
+    # Temporary hack to move optimizer out of policy
+    # optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     # Setup optimizers
     actor_optimizer = optim.Adam(policy.actor.parameters(), policy.config.actor_lr)
     critic_optimizer = optim.Adam(policy.critic_ensemble.parameters(), policy.config.critic_lr)
@@ -182,6 +362,9 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     grad_scaler = GradScaler(enabled=cfg.use_amp)
 
     step = 0  # number of policy updates (forward + backward + optim)
+
+    # if cfg.resume:
+    #     step = logger.load_last_training_state(optimizer, lr_scheduler)
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
@@ -217,21 +400,21 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
                 logger.log_video(eval_info["video_paths"][0], step, mode="eval")
             logging.info("Resume training")
 
-        if cfg.training.save_checkpoint and (
-            step % cfg.training.save_freq == 0
-            or step == cfg.training.offline_steps + cfg.training.online_steps
-        ):
-            logging.info(f"Checkpoint policy after step {step}")
-            # Note: Save with step as the identifier, and format it to have at least 6 digits but more if
-            # needed (choose 6 as a minimum for consistency without being overkill).
-            logger.save_checkpoint(
-                step,
-                policy,
-                actor_optimizer,
-                lr_scheduler,
-                identifier=step_identifier,
-            )
-            logging.info("Resume training")
+        # if cfg.training.save_checkpoint and (
+        #     step % cfg.training.save_freq == 0
+        #     or step == cfg.training.offline_steps + cfg.training.online_steps
+        # ):
+        #     logging.info(f"Checkpoint policy after step {step}")
+        #     # Note: Save with step as the identifier, and format it to have at least 6 digits but more if
+        #     # needed (choose 6 as a minimum for consistency without being overkill).
+        #     logger.save_checkpoint(
+        #         step,
+        #         policy,
+        #         optimizer,
+        #         lr_scheduler,
+        #         identifier=step_identifier,
+        #     )
+        #     logging.info("Resume training")
 
     # create dataloader for offline training
     if cfg.training.get("drop_n_last_frames"):
@@ -244,7 +427,6 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     else:
         shuffle = True
         sampler = None
-
     dataloader = torch.utils.data.DataLoader(
         offline_dataset,
         num_workers=cfg.training.num_workers,
@@ -256,54 +438,62 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     )
     dl_iter = cycle(dataloader)
 
-    policy.train()
-    offline_step = 0
-    for _ in range(step, cfg.training.offline_steps):
-        if offline_step == 0:
-            logging.info("Start offline training on a fixed dataset")
+    # policy.train()
+    # offline_step = 0
+    # for _ in range(step, cfg.training.offline_steps):
+    #     if offline_step == 0:
+    #         logging.info("Start offline training on a fixed dataset")
 
-        start_time = time.perf_counter()
-        batch = next(dl_iter)
-        dataloading_s = time.perf_counter() - start_time
+    #     start_time = time.perf_counter()
+    #     batch = next(dl_iter)
+    #     dataloading_s = time.perf_counter() - start_time
 
-        for key in batch:
-            batch[key] = batch[key].to(device, non_blocking=True)
+    #     for key in batch:
+    #         batch[key] = batch[key].to(device, non_blocking=True)
 
-        # train_info = update_policy(
-        #     policy,
-        #     batch,
-        #     optimizer,
-        #     cfg.training.grad_clip_norm,
-        #     grad_scaler=grad_scaler,
-        #     lr_scheduler=lr_scheduler,
-        #     use_amp=cfg.use_amp,
-        # )
+    #     train_info = update_policy(
+    #         policy,
+    #         batch,
+    #         optimizer,
+    #         cfg.training.grad_clip_norm,
+    #         grad_scaler=grad_scaler,
+    #         lr_scheduler=lr_scheduler,
+    #         use_amp=cfg.use_amp,
+    #     )
 
-        train_info = {
-            "loss": 0.0,
-            "grad_norm": 0.0,
-            "lr": cfg.training.lr,
-            "update_s": time.perf_counter() - start_time,
-        }
+    #     train_info["dataloading_s"] = dataloading_s
 
-        train_info["dataloading_s"] = dataloading_s
+    #     if step % cfg.training.log_freq == 0:
+    #         log_train_info(logger, train_info, step, cfg, offline_dataset, is_online=False)
 
-        if step % cfg.training.log_freq == 0:
-            log_train_info(logger, train_info, step, cfg, offline_dataset, is_online=False)
+    #     # Note: evaluate_and_checkpoint_if_needed happens **after** the `step`th training update has completed,
+    #     # so we pass in step + 1.
+    #     evaluate_and_checkpoint_if_needed(step + 1, is_online=False)
 
-        # Note: evaluate_and_checkpoint_if_needed happens **after** the `step`th training update has completed,
-        # so we pass in step + 1.
-        evaluate_and_checkpoint_if_needed(step + 1, is_online=False)
+    #     step += 1
+    #     offline_step += 1  # noqa: SIM113
 
-        step += 1
-        offline_step += 1  # noqa: SIM113
+    if cfg.training.online_steps == 0:
+        if eval_env:
+            eval_env.close()
+        logging.info("End of training")
+        return
+
+    # Online training.
 
     # Create an env dedicated to online episodes collection from policy rollout.
     online_env = make_env(cfg, n_envs=cfg.training.online_rollout_batch_size)
     resolve_delta_timestamps(cfg)
     online_buffer_path = logger.log_dir / "online_buffer"
-
-    # Initialize online buffer
+    if cfg.resume and not online_buffer_path.exists():
+        # If we are resuming a run, we default to the data shapes and buffer capacity from the saved online
+        # buffer.
+        logging.warning(
+            "When online training is resumed, we load the latest online buffer from the prior run, "
+            "and this might not coincide with the state of the buffer as it was at the moment the checkpoint "
+            "was made. This is because the online buffer is updated on disk during training, independently "
+            "of our explicit checkpointing mechanisms."
+        )
     online_dataset = OnlineBuffer(
         online_buffer_path,
         data_spec={
@@ -318,6 +508,10 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
         delta_timestamps=cfg.training.delta_timestamps,
     )
 
+    # If we are doing online rollouts asynchronously, deepcopy the policy to use for online rollouts (this
+    # makes it possible to do online rollouts in parallel with training updates).
+    online_rollout_policy = deepcopy(policy) if cfg.training.do_online_rollout_async else policy
+
     # Create dataloader for online training.
     concat_dataset = torch.utils.data.ConcatDataset([offline_dataset, online_dataset])
     sampler_weights = compute_sampler_weights(
@@ -326,7 +520,7 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
         online_dataset=online_dataset,
         # +1 because online rollouts return an extra frame for the "final observation". Note: we don't have
         # this final observation in the offline datasets, but we might add them in future.
-        online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
+        online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0) + 1,
         online_sampling_ratio=cfg.training.online_sampling_ratio,
     )
     sampler = torch.utils.data.WeightedRandomSampler(
@@ -344,6 +538,13 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     )
     dl_iter = cycle(dataloader)
 
+    # Lock and thread pool executor for asynchronous online rollouts. When asynchronous mode is disabled,
+    # these are still used but effectively do nothing.
+    lock = Lock()
+    # Note: 1 worker because we only ever want to run one set of online rollouts at a time. Batch
+    # parallelization of rollouts is handled within the job.
+    executor = ThreadPoolExecutor(max_workers=1)
+
     online_step = 0
     online_rollout_s = 0  # time take to do online rollout
     update_online_buffer_s = 0  # time taken to update the online buffer with the online rollout data
@@ -352,118 +553,99 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
     await_update_online_buffer_s = 0
     rollout_start_seed = cfg.training.online_env_seed
 
-    obs, _ = online_env.reset(seed=cfg.seed)
-    max_steps = online_env.call("_max_episode_steps")[0]
-    episode_return = 0
-    episode_length = 0
-    done = False
-    current_episode = 0
-
     while True:
-
-        # Preprocess observation
-        obs = preprocess_observation(obs)
-
         if online_step == cfg.training.online_steps:
             break
 
         if online_step == 0:
             logging.info("Start online training by interacting with environment")
 
+        def sample_trajectory_and_update_buffer():
+            nonlocal rollout_start_seed
+            with lock:
+                online_rollout_policy.load_state_dict(policy.state_dict())
+            online_rollout_policy.eval()
+            start_rollout_time = time.perf_counter()
+            with torch.no_grad():
+                eval_info = eval_policy(
+                    online_env,
+                    online_rollout_policy,
+                    n_episodes=cfg.training.online_rollout_n_episodes,
+                    max_episodes_rendered=min(10, cfg.training.online_rollout_n_episodes),
+                    videos_dir=logger.log_dir / "online_rollout_videos",
+                    return_episode_data=True,
+                    start_seed=(
+                        rollout_start_seed := (rollout_start_seed + cfg.training.batch_size) % 1000000
+                    ),
+                )
+            online_rollout_s = time.perf_counter() - start_rollout_time
+
+            with lock:
+                start_update_buffer_time = time.perf_counter()
+                online_dataset.add_data(eval_info["episodes"])
+
+                # Update the concatenated dataset length used during sampling.
+                concat_dataset.cumulative_sizes = concat_dataset.cumsum(concat_dataset.datasets)
+
+                # Update the sampling weights.
+                sampler.weights = compute_sampler_weights(
+                    offline_dataset,
+                    offline_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
+                    online_dataset=online_dataset,
+                    # +1 because online rollouts return an extra frame for the "final observation". Note: we don't have
+                    # this final observation in the offline datasets, but we might add them in future.
+                    online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0) + 1,
+                    online_sampling_ratio=cfg.training.online_sampling_ratio,
+                )
+                sampler.num_frames = len(concat_dataset)
+
+                update_online_buffer_s = time.perf_counter() - start_update_buffer_time
+
+            return online_rollout_s, update_online_buffer_s
+
+        future = executor.submit(sample_trajectory_and_update_buffer)
+        # If we aren't doing async rollouts, or if we haven't yet gotten enough examples in our buffer, wait
+        # here until the rollout and buffer update is done, before proceeding to the policy update steps.
+        if (
+            not cfg.training.do_online_rollout_async
+            or len(online_dataset) <= cfg.training.online_buffer_seed_size
+        ):
+            online_rollout_s, update_online_buffer_s = future.result()
+
+        if len(online_dataset) <= cfg.training.online_buffer_seed_size:
+            logging.info(
+                f"Seeding online buffer: {len(online_dataset)}/{cfg.training.online_buffer_seed_size}"
+            )
+            continue
+
+        # Check if we should start training yet
         if online_step < cfg.training.online_learning_start:
-            actions = np.array([online_env.single_action_space.sample() for _ in range(online_env.num_envs)])
-        else:
-            actions = policy.select_action(obs)
-            actions = actions.detach().cpu().numpy()
+            if online_step == 0:
+                logging.info(f"Collecting data without training for first {cfg.training.online_learning_start} steps")
+            online_step += 1
+            continue
 
-        # TODO (lilkm): wrap it in a function
-        # Take a single step
-        next_obs, reward, terminated, truncated, info = online_env.step(actions)
-
-        # Handle success info
-        if "final_info" in info:
-            successes = [info["is_success"] if info is not None else False for info in info["final_info"]]
-        else:
-            successes = [False] * online_env.num_envs
-
-        # Process done flags
-        done = terminated | truncated
-
-        # Prepare return dictionary with single-step data
-        transition_data = {
-            "observation": {
-                key: torch.stack([
-                    obs[key]
-                ], dim=1) for key in obs
-            },
-            "action": torch.from_numpy(actions),  # Add sequence dim
-            "reward": torch.from_numpy(reward),
-            "success": torch.tensor(successes),
-            "done": torch.from_numpy(done)
-        }
-
-        # Update observation and episode stats
-        obs = next_obs.copy()
-        episode_return += reward.mean().item()
-
-        # Get key transition elements and handle timeout
-        next_obs = {k: v[:, -1] for k, v in transition_data["observation"].items()}
-        reward = transition_data["reward"]
-        done = transition_data["done"]
-
-        episode_length += 1
-        done = done & (episode_length != max_steps)
-
-        # Store modified transition
-        modified_transition_data = {
-            **transition_data,
-            "done": done
-        }
-        
-        processed_data = _compile_single_transition_data(
-            transition_data=modified_transition_data,
-            env_indices=list(range(online_env.num_envs)),
-            start_episode_index=current_episode,
-            start_data_index=step
-        )
-        
-        online_dataset.add_data(processed_data)
-
-        start_update_buffer_time = time.perf_counter()
-
-        # Update dataset and sampling
-        concat_dataset.cumulative_sizes = concat_dataset.cumsum(concat_dataset.datasets)
-        sampler.weights = compute_sampler_weights(
-            offline_dataset,
-            offline_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
-            online_dataset=online_dataset,
-            online_drop_n_last_frames=cfg.training.get("drop_n_last_frames", 0),
-            online_sampling_ratio=cfg.training.online_sampling_ratio,
-        )
-        sampler.num_frames = len(concat_dataset)
-
-        update_online_buffer_s = time.perf_counter() - start_update_buffer_time
-        
-        # Handle episode termination
-        if done or (episode_length == max_steps):
-            # TODO(lilkm): do logging here
-            # episode_return and episode_length
-            
-            obs, _ = online_env.reset(seed=cfg.seed)
-            episode_return = 0
-            episode_length = 0
-            done = False
-            current_episode += 1
-
-        if online_step > cfg.training.online_learning_start:
-            policy.train()
-            for _ in range(cfg.training.online_steps_between_rollouts): # UTD
-                start_time = time.perf_counter()
-                batch = next(dl_iter)
-                dataloading_s = time.perf_counter() - start_time
+        policy.train()
+        for _ in range(cfg.training.online_steps_between_rollouts):
+            for _ in range(cfg.training.cta_ratio - 1):
+                with lock:
+                    start_time = time.perf_counter()
+                    batch = next(dl_iter)
+                    dataloading_s = time.perf_counter() - start_time
 
                 for key in batch:
                     batch[key] = batch[key].to(cfg.device, non_blocking=True)
+
+                # train_info = update_policy(
+                #     policy,
+                #     batch,
+                #     optimizer,
+                #     cfg.training.grad_clip_norm,
+                #     grad_scaler=grad_scaler,
+                #     lr_scheduler=lr_scheduler,
+                #     use_amp=cfg.use_amp,
+                #     lock=lock,
+                # )
 
                 # TODO (lilkm): put this in a policy_update() function 
                 # Update critics
@@ -473,27 +655,12 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
                 critic_optimizer.zero_grad()
                 critics_loss.backward()
                 critic_optimizer.step()
-                
-                # critic_optimizer.zero_grad()
-                # grad_scaler.scale(critics_loss).backward()
-                # grad_scaler.unscale_(critic_optimizer)
-                
-                # grad_norm = torch.nn.utils.clip_grad_norm_(
-                #     policy.critic_ensemble.parameters(),
-                #     cfg.training.grad_clip_norm,
-                #     error_if_nonfinite=False,
-                # )
-                
-                # grad_scaler.step(critic_optimizer)
-                # grad_scaler.update()
-
-                # Delayed policy updates
-                # if step % cfg.policy.update_frequency == 0:
 
 
-            start_time = time.perf_counter()
-            batch = next(dl_iter)
-            dataloading_s = time.perf_counter() - start_time
+            with lock:
+                start_time = time.perf_counter()
+                batch = next(dl_iter)
+                dataloading_s = time.perf_counter() - start_time
 
             for key in batch:
                 batch[key] = batch[key].to(cfg.device, non_blocking=True)
@@ -569,12 +736,13 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
                     "lr": cfg.training.lr,
                     "update_s": time.perf_counter() - start_time,
                 }
-
+            
             train_info["dataloading_s"] = dataloading_s
             train_info["online_rollout_s"] = online_rollout_s
             train_info["update_online_buffer_s"] = update_online_buffer_s
             train_info["await_update_online_buffer_s"] = await_update_online_buffer_s
-            train_info["online_buffer_size"] = len(online_dataset)
+            with lock:
+                train_info["online_buffer_size"] = len(online_dataset)
 
             if step % cfg.training.log_freq == 0:
                 log_train_info(logger, train_info, step, cfg, online_dataset, is_online=True)
@@ -584,7 +752,14 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
             evaluate_and_checkpoint_if_needed(step + 1, is_online=True)
 
             step += 1
-        online_step += 1
+            online_step += 1
+
+        # If we're doing async rollouts, we should now wait until we've completed them before proceeding
+        # to do the next batch of rollouts.
+        if future.running():
+            start = time.perf_counter()
+            online_rollout_s, update_online_buffer_s = future.result()
+            await_update_online_buffer_s = time.perf_counter() - start
 
         if online_step >= cfg.training.online_steps:
             break
@@ -593,13 +768,24 @@ def train_sac(cfg: DictConfig, out_dir: str | None = None, job_name: str | None 
         eval_env.close()
     logging.info("End of training")
 
+
 @hydra.main(version_base="1.2", config_name="default", config_path="../configs")
-def main(cfg: DictConfig):
-    train_sac(
+def train_cli(cfg: dict):
+    train(
         cfg,
         out_dir=hydra.core.hydra_config.HydraConfig.get().run.dir,
         job_name=hydra.core.hydra_config.HydraConfig.get().job.name,
     )
 
+
+def train_notebook(out_dir=None, job_name=None, config_name="default", config_path="../configs"):
+    from hydra import compose, initialize
+
+    hydra.core.global_hydra.GlobalHydra.instance().clear()
+    initialize(config_path=config_path)
+    cfg = compose(config_name=config_name)
+    train(cfg, out_dir=out_dir, job_name=job_name)
+
+
 if __name__ == "__main__":
-    main()
+    train_cli()
