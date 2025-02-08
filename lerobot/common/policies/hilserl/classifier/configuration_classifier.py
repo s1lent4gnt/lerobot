@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
@@ -14,6 +14,7 @@ class ClassifierConfig:
     device: str = "cpu"
     model_type: str = "cnn"  # "transformer" or "cnn"
     num_cameras: int = 2
+    image_keys: list[str] = field(default_factory=lambda: ["observation.images.top", "observation.images.wrist"])
 
     def save_pretrained(self, save_dir):
         """Save config to json file."""

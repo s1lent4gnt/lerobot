@@ -71,7 +71,7 @@ def support_amp(device: torch.device, cfg: DictConfig) -> bool:
 
 
 def train_epoch(model, train_loader, criterion, optimizer, grad_scaler, device, logger, step, cfg):
-    # Single epoch training loop with AMP support and progress tracking
+    # Single epoch training loop with A MP support and progress tracking
     model.train()
     correct = 0
     total = 0
@@ -79,7 +79,8 @@ def train_epoch(model, train_loader, criterion, optimizer, grad_scaler, device, 
     pbar = tqdm(train_loader, desc="Training")
     for batch_idx, batch in enumerate(pbar):
         start_time = time.perf_counter()
-        images = [batch[img_key].to(device) for img_key in cfg.training.image_keys]
+        # images = [batch[img_key].to(device) for img_key in cfg.training.image_keys]
+        images = {img_key: batch[img_key].to(device) for img_key in cfg.training.image_keys}
         labels = batch[cfg.training.label_key].float().to(device)
 
         # Forward pass with optional AMP
@@ -130,7 +131,8 @@ def validate(model, val_loader, criterion, device, logger, cfg, num_samples_to_l
         torch.autocast(device_type=device.type) if support_amp(device, cfg) else nullcontext(),
     ):
         for batch in tqdm(val_loader, desc="Validation"):
-            images = [batch[img_key].to(device) for img_key in cfg.training.image_keys]
+            # Convert each image in the batch to the correct device.
+            images = {img_key: batch[img_key].to(device) for img_key in cfg.training.image_keys}
             labels = batch[cfg.training.label_key].float().to(device)
 
             outputs = model(images)
@@ -145,16 +147,18 @@ def validate(model, val_loader, criterion, device, logger, cfg, num_samples_to_l
             total += labels.size(0)
             running_loss += loss.item()
 
-            # Log sample predictions for visualization
+            # Log sample predictions for visualization.
+            img_key = cfg.training.image_keys[0] # Choose one image key for logging
+            num_batch_samples = images[img_key].size(0)
             if len(samples) < num_samples_to_log:
-                for i in range(min(num_samples_to_log - len(samples), len(images))):
+                for i in range(min(num_samples_to_log - len(samples), num_batch_samples)):
                     if model.config.num_classes == 2:
                         confidence = round(outputs.probabilities[i].item(), 3)
                     else:
                         confidence = [round(prob, 3) for prob in outputs.probabilities[i].tolist()]
                     samples.append(
                         {
-                            "image": wandb.Image(images[i].cpu()),
+                            "image": wandb.Image(images[img_key][i].cpu()),
                             "true_label": labels[i].item(),
                             "predicted": predictions[i].item(),
                             "confidence": confidence,
@@ -258,7 +262,8 @@ def train(cfg: DictConfig) -> None:
     # Initialize model and training components
     model = get_model(cfg=cfg, logger=logger).to(device)
 
-    optimizer = optim.AdamW(model.parameters(), lr=cfg.training.learning_rate)
+    # optimizer = optim.AdamW(model.parameters(), lr=cfg.training.learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
     # Use BCEWithLogitsLoss for binary classification and CrossEntropyLoss for multi-class
     criterion = nn.BCEWithLogitsLoss() if model.config.num_classes == 2 else nn.CrossEntropyLoss()
     grad_scaler = GradScaler(enabled=cfg.training.use_amp)
@@ -272,6 +277,7 @@ def train(cfg: DictConfig) -> None:
     if cfg.resume:
         step = logger.load_last_training_state(optimizer, None)
 
+    print(f"device : {device}")
     # Training loop with validation and checkpointing
     for epoch in range(cfg.training.num_epochs):
         logging.info(f"\nEpoch {epoch+1}/{cfg.training.num_epochs}")
