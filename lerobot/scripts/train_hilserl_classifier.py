@@ -65,6 +65,34 @@ def create_balanced_sampler(dataset, cfg):
 
     return WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
 
+# def create_balanced_sampler(dataset, cfg):
+#     # Get underlying dataset if using Subset
+#     original_dataset = dataset.dataset if isinstance(dataset, torch.utils.data.Subset) else dataset
+    
+#     # Get indices if using Subset (for slicing)
+#     indices = dataset.indices if isinstance(dataset, torch.utils.data.Subset) else None
+
+#     # Efficiently get labels from Hugging Face dataset
+#     if indices is not None:
+#         # Get subset of labels using Hugging Face's select()
+#         hf_subset = original_dataset.hf_dataset.select(indices)
+#         labels = hf_subset[cfg.training.label_key]
+#     else:
+#         # Get all labels directly
+#         labels = original_dataset.hf_dataset[cfg.training.label_key]
+
+#     # Convert to tensor and balance
+#     labels = torch.stack(labels)  # Handles Hugging Face's transform-to-torch
+#     _, counts = torch.unique(labels, return_counts=True)
+#     class_weights = 1.0 / counts.float()
+#     sample_weights = class_weights[labels]
+
+#     return WeightedRandomSampler(
+#         weights=sample_weights,
+#         num_samples=len(sample_weights),
+#         replacement=True
+#     )
+
 
 def support_amp(device: torch.device, cfg: DictConfig) -> bool:
     # Check if the device supports AMP
@@ -270,8 +298,10 @@ def train(cfg: DictConfig) -> None:
     device = get_safe_torch_device(cfg.device, log=True)
     set_global_seed(cfg.seed)
 
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # out_dir = Path(cfg.output_dir)
+    # out_dir.mkdir(parents=True, exist_ok=True)
+    # out_dir = Path(hydra.core.hydra_config.HydraConfig.get().run.dir) / "classifier"
+    out_dir = hydra.core.hydra_config.HydraConfig.get().run.dir + "classifier"
     logger = Logger(cfg, out_dir, cfg.wandb.job_name if cfg.wandb.enable else None)
 
     # Setup dataset and dataloaders
