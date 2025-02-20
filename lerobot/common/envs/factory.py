@@ -13,14 +13,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import importlib
-from collections import deque
-
+import einops
 import gymnasium as gym
+import importlib
 import numpy as np
 import torch
+from collections import deque
+from mani_skill.utils import common
+from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 from omegaconf import DictConfig
-# from mani_skill.utils import common
 
 
 def make_env(cfg: DictConfig, n_envs: int | None = None) -> gym.vector.VectorEnv | None:
@@ -89,63 +90,123 @@ def make_maniskill_env(cfg: DictConfig, n_envs: int | None = None) -> gym.vector
     return env
 
 
-class PixelWrapper(gym.Wrapper):
+def preprocess_maniskill_observation(observations: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
+    """Convert environment observation to LeRobot format observation.
+    Args:
+        observation: Dictionary of observation batches from a Gym vector environment.
+    Returns:
+        Dictionary of observation batches with keys renamed to LeRobot format and values as tensors.
     """
-    Wrapper for pixel observations. Works with Maniskill vectorized environments
-    """
+    # map to expected inputs for the policy
+    return_observations = {}
+    # TODO: You have to merge all tensors from agent key and extra key
+    # You don't keep sensor param key in the observation
+    # And you keep sensor data rgb
+    q_pos = observations["agent"]["qpos"]
+    q_vel = observations["agent"]["qvel"]
+    tcp_pos = observations["extra"]["tcp_pose"]
+    img = observations["sensor_data"]["base_camera"]["rgb"]
 
-    def __init__(self, cfg, env, num_envs, num_frames=3):
+    _, h, w, c = img.shape
+    assert c < h and c < w, f"expect channel last images, but instead got {img.shape=}"
+
+    # sanity check that images are uint8
+    assert img.dtype == torch.uint8, f"expect torch.uint8, but instead {img.dtype=}"
+
+    # convert to channel first of type float32 in range [0,1]
+    img = einops.rearrange(img, "b h w c -> b c h w").contiguous()
+    img = img.type(torch.float32)
+    img /= 255
+
+    state = torch.cat([q_pos, q_vel, tcp_pos], dim=-1)
+
+    return_observations["observation.image"] = img
+    return_observations["observation.state"] = state
+    return return_observations
+
+
+class ManiSkillObservationWrapper(gym.ObservationWrapper):
+    def __init__(self, env, device: torch.device = "cuda"):
         super().__init__(env)
-        self.cfg = cfg
-        self.env = env
-        self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(num_envs, num_frames * 3, cfg.env.render_size, cfg.env.render_size),
-            dtype=np.uint8,
-        )
-        self._frames = deque([], maxlen=num_frames)
-        self._render_size = cfg.env.render_size
+        self.device = device
 
-    def _get_obs(self, obs):
-        frame = obs["sensor_data"]["base_camera"]["rgb"].cpu().permute(0, 3, 1, 2)
-        self._frames.append(frame)
-        return {"pixels": torch.from_numpy(np.concatenate(self._frames, axis=1)).to(self.env.device)}
+    def observation(self, observation):
+        observation = preprocess_maniskill_observation(observation)
+        observation = {k: v.to(self.device) for k, v in observation.items()}
+        return observation
 
-    def reset(self, seed):
-        obs, info = self.env.reset()  # (seed=seed)
-        for _ in range(self._frames.maxlen):
-            obs_frames = self._get_obs(obs)
-        return obs_frames, info
+
+class ManiSkillCompat(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
-        return self._get_obs(obs), reward, terminated, truncated, info
+        reward = reward.item()
+        terminated = terminated.item()
+        truncated = truncated.item()
+        return obs, reward, terminated, truncated, info
 
 
-class ConvertToLeRobotEnv(gym.Wrapper):
-    def __init__(self, env, num_envs):
+class ManiSkillActionWrapper(gym.ActionWrapper):
+    def __init__(self, env):
         super().__init__(env)
+        self.action_space = gym.spaces.Tuple(spaces=(env.action_space, gym.spaces.Discrete(2)))
 
-    def reset(self, seed=None, options=None):
-        obs, info = self.env.reset(seed=seed, options={})
-        return self._get_obs(obs), info
+    def action(self, action):
+        action, telop = action
+        return action
+
+
+class ManiSkillMultiplyActionWrapper(gym.Wrapper):
+    def __init__(self, env, multiply_factor: float = 1):
+        super().__init__(env)
+        self.multiply_factor = multiply_factor
+        action_space_agent: gym.spaces.Box = env.action_space[0]
+        action_space_agent.low = action_space_agent.low * multiply_factor
+        action_space_agent.high = action_space_agent.high * multiply_factor
+        self.action_space = gym.spaces.Tuple(spaces=(action_space_agent, gym.spaces.Discrete(2)))
 
     def step(self, action):
-        obs, reward, terminated, truncated, info = self.env.step(action)
-        return self._get_obs(obs), reward, terminated, truncated, info
+        if isinstance(action, tuple):
+            action, telop = action
+        else:
+            telop = 0
+        action = action / self.multiply_factor
+        obs, reward, terminated, truncated, info = self.env.step((action, telop))
+        return obs, reward, terminated, truncated, info
 
-    def _get_obs(self, observation):
-        sensor_data = observation.pop("sensor_data")
-        del observation["sensor_param"]
-        images = []
-        for cam_data in sensor_data.values():
-            images.append(cam_data["rgb"])
 
-        images = torch.concat(images, axis=-1)
-        # flatten the rest of the data which should just be state data
-        observation = common.flatten_state_dict(observation, use_torch=True, device=self.base_env.device)
-        ret = dict()
-        ret["state"] = observation
-        ret["pixels"] = images
-        return ret
+def make_maniskill(
+    cfg: DictConfig,
+    n_envs: int | None = None,
+) -> gym.Env:
+    """
+    Factory function to create a ManiSkill environment with standard wrappers.
+
+    Args:
+        task: Name of the ManiSkill task
+        obs_mode: Observation mode (rgb, rgbd, etc)
+        control_mode: Control mode for the robot
+        render_mode: Rendering mode
+        sensor_configs: Camera sensor configurations
+        n_envs: Number of parallel environments
+
+    Returns:
+        A wrapped ManiSkill environment
+    """
+
+    env = gym.make(
+        cfg.env.task,
+        obs_mode=cfg.env.obs,
+        control_mode=cfg.env.control_mode,
+        render_mode=cfg.env.render_mode,
+        sensor_configs={"width": cfg.env.image_size, "height": cfg.env.image_size},
+        num_envs=n_envs,
+    )
+    env = ManiSkillObservationWrapper(env, device=cfg.env.device)
+    env = ManiSkillVectorEnv(env, ignore_terminations=True)
+    env._max_episode_steps = env.max_episode_steps = 50  # gym_utils.find_max_episode_steps_value(env)
+    env.unwrapped.metadata["render_fps"] = 20
+
+    return env

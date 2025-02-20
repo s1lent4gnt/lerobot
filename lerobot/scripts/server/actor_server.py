@@ -31,7 +31,9 @@ from omegaconf import DictConfig
 from torch import nn
 
 # TODO: Remove the import of maniskill
-# from lerobot.common.envs.factory import make_maniskill_env
+from lerobot.common.envs.factory import make_maniskill_env, make_maniskill
+
+
 # from lerobot.common.envs.utils import preprocess_maniskill_observation
 from lerobot.common.policies.factory import make_policy
 from lerobot.common.policies.sac.modeling_sac import SACPolicy
@@ -182,7 +184,8 @@ def act_with_policy(cfg: DictConfig, robot: Robot, reward_classifier: nn.Module)
 
     logging.info("make_env online")
 
-    online_env = make_robot_env(robot=robot, reward_classifier=reward_classifier, cfg=cfg)
+    # online_env = make_robot_env(robot=robot, reward_classifier=reward_classifier, cfg=cfg.env)
+    online_env = make_maniskill(cfg=cfg, n_envs=1)
 
     set_global_seed(cfg.seed)
     device = get_safe_torch_device(cfg.device, log=True)
@@ -195,13 +198,15 @@ def act_with_policy(cfg: DictConfig, robot: Robot, reward_classifier: nn.Module)
     # HACK: This is an ugly hack to pass the normalization parameters to the policy
     # Because the action space is dynamic so we override the output normalization parameters
     # it's ugly, we know ... and we will fix it
-    min_action_space: list = online_env.action_space.spaces[0].low.tolist()
-    max_action_space: list = online_env.action_space.spaces[0].high.tolist()
+    # min_action_space: list = online_env.action_space.spaces[0].low.tolist()
+    # max_action_space: list = online_env.action_space.spaces[0].high.tolist()
+
+    min_action_space: list = online_env.action_space.low.tolist()
+    max_action_space: list = online_env.action_space.high.tolist()
     output_normalization_params: dict[dict[str, list]] = {
         "action": {"min": min_action_space, "max": max_action_space}
     }
     cfg.policy.output_normalization_params = output_normalization_params
-    cfg.policy.output_shapes["action"] = online_env.action_space.spaces[0].shape
 
     ### Instantiate the policy in both the actor and learner processes
     ### To avoid sending a SACPolicy object through the port, we create a policy intance
@@ -244,32 +249,23 @@ def act_with_policy(cfg: DictConfig, robot: Robot, reward_classifier: nn.Module)
             next_obs, reward, done, truncated, info = online_env.step(action)
 
             # HACK: We have only one env but we want to batch it, it will be resolved with the torch box
-            action = (
-                torch.from_numpy(action[0]).to(device, non_blocking=device.type == "cuda").unsqueeze(dim=0)
-            )
+            # action = torch.from_numpy(action[0]).to(device, non_blocking=True).unsqueeze(dim=0)
+            action = torch.from_numpy(action).to(device, non_blocking=True)
 
         sum_reward_episode += float(reward)
 
         # NOTE: We overide the action if the intervention is True, because the action applied is the intervention action
         if "is_intervention" in info and info["is_intervention"]:
             # TODO: Check the shape
-            # NOTE: The action space for demonstration before hand is with the full action space
-            # but sometimes for example we want to deactivate the gripper
             action = info["action_intervention"]
-            episode_intervention = True
-
-        # Check for NaN values in observations
-        for key, tensor in obs.items():
-            if torch.isnan(tensor).any():
-                logging.error(f"[ACTOR] NaN values found in obs[{key}] at step {interaction_step}")
 
         list_transition_to_send_to_learner.append(
             Transition(
                 state=obs,
                 action=action,
-                reward=reward,
+                reward=reward[0].item(),
                 next_state=next_obs,
-                done=done,
+                done=done[0].item(),
                 complementary_info=info,  # TODO Handle information for the transition, is_demonstraction: bool
             )
         )
@@ -279,7 +275,8 @@ def act_with_policy(cfg: DictConfig, robot: Robot, reward_classifier: nn.Module)
 
         # HACK: We have only one env but we want to batch it, it will be resolved with the torch box
         # Because we are using a single environment we can index at zero
-        if done or truncated:
+        # if done or truncated:
+        if done[0].item() or truncated[0].item():
             # TODO: Handle logging for episode information
             logging.info(f"[ACTOR] Global step {interaction_step}: Episode reward: {sum_reward_episode}")
 

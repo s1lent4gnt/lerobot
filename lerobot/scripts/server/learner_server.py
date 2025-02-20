@@ -458,12 +458,9 @@ def add_actor_information_and_train(
         logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
 
         logger.log_dict(
-            {
-                "Optimization frequency loop [Hz]": frequency_for_one_optimization_step,
-                "Optimization step": optimization_step,
-            },
+            {"Optimization frequency loop [Hz]": frequency_for_one_optimization_step},
+            step=optimization_step,
             mode="train",
-            custom_step_key="Optimization step",
         )
 
         optimization_step += 1
