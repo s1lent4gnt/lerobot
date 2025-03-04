@@ -17,6 +17,7 @@ import io
 import logging
 import pickle
 import queue
+import time
 from statistics import mean, quantiles
 import signal
 from functools import lru_cache
@@ -53,6 +54,8 @@ from lerobot.scripts.server.gym_manipulator import get_classifier, make_robot_en
 from lerobot.scripts.server import learner_service
 
 from threading import Event
+
+from lerobot.common.robot_devices.utils import busy_wait
 
 logging.basicConfig(level=logging.INFO)
 
@@ -108,7 +111,7 @@ def receive_policy(
                 logging.info(f"Received model update at step {step}")
             elif model_update.transfer_state == hilserl_pb2.TransferState.TRANSFER_END:
                 bytes_buffer.write(model_update.parameter_bytes)
-                logging.info(
+                logging.debug(
                     f"Received model update at step end size {bytes_buffer_size(bytes_buffer)}"
                 )
 
@@ -152,6 +155,9 @@ def transitions_stream(shutdown_event: Event, message_queue: queue.Queue):
 
             transition_message = hilserl_pb2.Transition(
                 transition_bytes=transition_bytes
+            )
+            logging.info(
+                f"[ACTOR] Sending {len(transition_to_send_to_learner)} transitions to Learner, qsize {message_queue.qsize()}."
             )
 
             response = hilserl_pb2.ActorInformation(transition=transition_message)
@@ -284,13 +290,13 @@ def act_with_policy(
     # HACK: This is an ugly hack to pass the normalization parameters to the policy
     # Because the action space is dynamic so we override the output normalization parameters
     # it's ugly, we know ... and we will fix it
-    min_action_space: list = online_env.action_space.spaces[0].low.tolist()
-    max_action_space: list = online_env.action_space.spaces[0].high.tolist()
-    output_normalization_params: dict[dict[str, list]] = {
-        "action": {"min": min_action_space, "max": max_action_space}
-    }
-    cfg.policy.output_normalization_params = output_normalization_params
-    cfg.policy.output_shapes["action"] = online_env.action_space.spaces[0].shape
+    # min_action_space: list = online_env.action_space.spaces[0].low.tolist()
+    # max_action_space: list = online_env.action_space.spaces[0].high.tolist()
+    # output_normalization_params: dict[dict[str, list]] = {
+    #     "action": {"min": min_action_space, "max": max_action_space}
+    # }
+    # cfg.policy.output_normalization_params = output_normalization_params
+    # cfg.policy.output_shapes["action"] = online_env.action_space.spaces[0].shape
 
     ### Instantiate the policy in both the actor and learner processes
     ### To avoid sending a SACPolicy object through the port, we create a policy intance
@@ -316,6 +322,7 @@ def act_with_policy(
     episode_intervention = False
 
     for interaction_step in range(cfg.training.online_steps):
+        start_time = time.perf_counter()
         if shutdown_event.is_set():
             logging.info("[ACTOR] Shutdown signal received. Exiting...")
             return
@@ -377,7 +384,6 @@ def act_with_policy(
                 complementary_info=info,  # TODO Handle information for the transition, is_demonstraction: bool
             )
         )
-
         # assign obs to the next obs and continue the rollout
         obs = next_obs
 
@@ -418,6 +424,10 @@ def act_with_policy(
             sum_reward_episode = 0.0
             episode_intervention = False
             obs, info = online_env.reset()
+
+    if cfg.fps is not None:
+        dt_time = time.perf_counter() - start_time
+        busy_wait(1 / cfg.fps - dt_time)
 
 
 def send_transitions_in_chunks(transitions: list, message_queue, chunk_size: int = 100):
@@ -461,6 +471,8 @@ def log_policy_frequency_issue(
 @hydra.main(version_base="1.2", config_name="default", config_path="../../configs")
 def actor_cli(cfg: dict):
     robot = make_robot(cfg=cfg.robot)
+    if not robot.is_connected:
+        robot.connect()
 
     shutdown_event = Event()
 
