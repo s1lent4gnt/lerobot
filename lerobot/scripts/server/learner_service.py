@@ -15,7 +15,7 @@ from lerobot.scripts.server.buffer import (
 )
 
 
-MAX_MESSAGE_SIZE = 4 * 1024 * 1024  # 4 MB
+MAX_MESSAGE_SIZE = -1  # 32 * 1024 * 1024  # 4 MB
 CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
 MAX_WORKERS = 10
 STUTDOWN_TIMEOUT = 10
