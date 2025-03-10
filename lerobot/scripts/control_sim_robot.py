@@ -79,6 +79,10 @@ import gymnasium as gym
 import numpy as np
 import torch
 
+from lerobot.franka_sim.franka_sim.utils.viewer_utils import DualMujocoViewer
+from lerobot.franka_sim.franka_sim.envs.wrappers import JoystickIntervention
+from lerobot.franka_sim.franka_sim.gamepad.joystick_expert import ControllerType
+
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.common.robot_devices.control_utils import (
     init_keyboard_listener,
@@ -164,7 +168,6 @@ def teleoperate(env, robot: Robot, process_action_fn, teleop_time_s=None):
 def record(
     env,
     robot: Robot,
-    process_action_from_leader,
     root: Path,
     repo_id: str,
     task: str,
@@ -183,7 +186,7 @@ def record(
     resume: bool = False,
     local_files_only: bool = False,
     run_compute_stats: bool = True,
-    assign_rewards: bool = False,
+    assign_rewards: bool = True,
 ) -> LeRobotDataset:
     # Load pretrained policy
 
@@ -199,20 +202,21 @@ def record(
             fps = policy_fps
             logging.warning(f"No fps provided, so using the fps from policy config ({policy_fps}).")
 
-    if policy is None and process_action_from_leader is None:
-        raise ValueError("Either policy or process_action_fn has to be set to enable control in sim.")
+    # if policy is None:
+    #     raise ValueError("Either policy or process_action_fn has to be set to enable control in sim.")
 
     # initialize listener before sim env
     listener, events = init_keyboard_listener(assign_rewards=assign_rewards)
 
-    # create sim env
-    env = env()
+    # # create sim env
+    # env = env()
 
     # Create empty dataset or load existing saved episodes
-    num_cameras = sum([1 if "image" in key else 0 for key in env.observation_space])
+    num_cameras = sum([1 for key in env.observation_space["image"]])
 
     # get image keys
-    image_keys = [key for key in env.observation_space if "image" in key]
+    # image_keys = [key for key in env.observation_space if "image" in key]
+    image_keys = ["front", "wrist"]
     state_keys_dict = env_cfg.state_keys
 
     if resume:
@@ -230,7 +234,7 @@ def record(
         features = DEFAULT_FEATURES
         # add image keys to features
         for key in image_keys:
-            shape = env.observation_space[key].shape
+            shape = env.observation_space["image"][key].shape
             if not key.startswith("observation.image."):
                 key = "observation.image." + key
             features[key] = {"dtype": "video", "names": ["channel", "height", "width"], "shape": shape}
@@ -239,7 +243,7 @@ def record(
             features[key] = {
                 "dtype": "float32",
                 "names": None,
-                "shape": env.observation_space[obs_key].shape,
+                "shape": env.observation_space["state"][obs_key].shape,
             }
 
         features["action"] = {"dtype": "float32", "shape": env.action_space.shape, "names": None}
@@ -257,97 +261,104 @@ def record(
             image_writer_threads=num_image_writer_threads_per_camera * num_cameras,
         )
 
-    recorded_episodes = 0
-    while True:
-        log_say(f"Recording episode {dataset.num_episodes}", play_sounds)
+    # Create the dual viewer
+    dual_viewer = DualMujocoViewer(env.model, env.data)
 
-        if events is None:
-            events = {"exit_early": False}
+    with dual_viewer as viewer:
+        recorded_episodes = 0
+        while viewer.is_running():
+            log_say(f"Recording episode {dataset.num_episodes}", play_sounds)
 
-        if episode_time_s is None:
-            episode_time_s = float("inf")
+            if events is None:
+                events = {"exit_early": False}
 
-        timestamp = 0
-        start_episode_t = time.perf_counter()
+            if episode_time_s is None:
+                episode_time_s = float("inf")
 
-        seed = np.random.randint(0, 1e5)
-        observation, info = env.reset(seed=seed)
+            timestamp = 0
+            start_episode_t = time.perf_counter()
 
-        while timestamp < episode_time_s:
-            start_loop_t = time.perf_counter()
+            seed = np.random.randint(0, 1e5)
+            observation, info = env.reset(seed=seed)
 
-            if policy is not None:
-                action = predict_action(observation, policy, device, use_amp)
-            else:
-                leader_pos = robot.leader_arms.main.read("Present_Position")
-                action = process_action_from_leader(leader_pos)
+            while timestamp < episode_time_s:
+                start_loop_t = time.perf_counter()
 
-            observation, reward, terminated, _, info = env.step(action)
-
-            success = info.get("is_success", False)
-            env_timestamp = info.get("timestamp", dataset.episode_buffer["size"] / fps)
-
-            frame = {
-                "action": torch.from_numpy(action),
-                "next.reward": reward,
-                "next.success": success,
-                "seed": seed,
-                "timestamp": env_timestamp,
-            }
-
-            # Overwrite environment reward with manually assigned reward
-            if assign_rewards:
-                frame["next.reward"] = events["next.reward"]
-
-                # Should success always be false to match what we do in control_utils?
-                frame["next.success"] = False
-
-            for key in image_keys:
-                if not key.startswith("observation.image"):
-                    frame["observation.image." + key] = observation[key]
+                if policy is not None:
+                    action = predict_action(observation, policy, device, use_amp)
                 else:
-                    frame[key] = observation[key]
+                    action = np.zeros(env.action_space.sample().shape)
+                    # leader_pos = robot.leader_arms.main.read("Present_Position")
+                    # action = process_action_from_leader(leader_pos)
 
-            for key, obs_key in state_keys_dict.items():
-                frame[key] = torch.from_numpy(observation[obs_key])
+                observation, reward, terminated, _, info = env.step(action)
 
-            dataset.add_frame(frame)
+                viewer.sync()
 
-            if display_cameras and not is_headless():
+                success = info.get("is_success", False)
+                env_timestamp = info.get("timestamp", dataset.episode_buffer["size"] / fps)
+
+                frame = {
+                    "action": torch.from_numpy(action),
+                    "next.reward": reward,
+                    "next.success": success,
+                    "seed": seed,
+                    "timestamp": env_timestamp,
+                }
+
+                # Overwrite environment reward with manually assigned reward
+                if assign_rewards:
+                    frame["next.reward"] = events["next.reward"]
+
+                    # Should success always be false to match what we do in control_utils?
+                    frame["next.success"] = False
+
                 for key in image_keys:
-                    cv2.imshow(key, cv2.cvtColor(observation[key], cv2.COLOR_RGB2BGR))
-                cv2.waitKey(1)
+                    if not key.startswith("observation.image"):
+                        frame["observation.image." + key] = observation["image"][key]
+                    else:
+                        frame[key] = observation[key]
 
-            if fps is not None:
+                for key, obs_key in state_keys_dict.items():
+                    frame[key] = torch.from_numpy(observation["state"][obs_key])
+
+                dataset.add_frame(frame)
+
+                if display_cameras and not is_headless():
+                    for key in image_keys:
+                        cv2.imshow(key, cv2.cvtColor(observation["state"][key], cv2.COLOR_RGB2BGR))
+                    cv2.waitKey(1)
+
+                if fps is not None:
+                    dt_s = time.perf_counter() - start_loop_t
+                    busy_wait(1 / fps - dt_s)
+
                 dt_s = time.perf_counter() - start_loop_t
-                busy_wait(1 / fps - dt_s)
+                log_control_info(robot, dt_s, fps=fps)
 
-            dt_s = time.perf_counter() - start_loop_t
-            log_control_info(robot, dt_s, fps=fps)
+                timestamp = time.perf_counter() - start_episode_t
+                if events["exit_early"] or terminated:
+                    events["exit_early"] = False
+                    break
 
-            timestamp = time.perf_counter() - start_episode_t
-            if events["exit_early"] or terminated:
+            if events["rerecord_episode"]:
+                log_say("Re-record episode", play_sounds)
+                events["rerecord_episode"] = False
                 events["exit_early"] = False
+                dataset.clear_episode_buffer()
+                continue
+
+            dataset.save_episode(task=task)
+            recorded_episodes += 1
+
+            if events["stop_recording"] or recorded_episodes >= num_episodes:
                 break
-
-        if events["rerecord_episode"]:
-            log_say("Re-record episode", play_sounds)
-            events["rerecord_episode"] = False
-            events["exit_early"] = False
-            dataset.clear_episode_buffer()
-            continue
-
-        dataset.save_episode(task=task)
-        recorded_episodes += 1
-
-        if events["stop_recording"] or recorded_episodes >= num_episodes:
-            break
-        else:
-            logging.info("Waiting for a few seconds before starting next episode recording...")
-            busy_wait(3)
+            else:
+                logging.info("Waiting for a few seconds before starting next episode recording...")
+                busy_wait(3)
 
     log_say("Stop recording", play_sounds, blocking=True)
-    stop_recording(robot, listener, display_cameras)
+    # stop_recording(robot, listener, display_cameras)
 
     if run_compute_stats:
         logging.info("Computing dataset statistics")
@@ -525,10 +536,15 @@ if __name__ == "__main__":
 
     # make gym env
     env_cfg = init_hydra_config(env_config_path)
-    importlib.import_module(f"gym_{env_cfg.env.name}")
+    importlib.import_module(f"{env_cfg.env.name}")
 
-    def env_constructor():
-        return gym.make(env_cfg.env.handle, disable_env_checker=True, **env_cfg.env.gym)
+    # def env_constructor():
+    #     return gym.make(env_cfg.env.handle, disable_env_checker=True, **env_cfg.env.gym)
+
+    controller_type = ControllerType["xbox".upper()]
+
+    env = gym.make("PandaPickCubeVision-v0", render_mode="human", image_obs=True)
+    env = JoystickIntervention(env, controller_type=controller_type)
 
     robot = None
     process_leader_actions_fn = None
@@ -538,23 +554,23 @@ if __name__ == "__main__":
         robot_overrides = ["~cameras", "~follower_arms"]
         robot_cfg = init_hydra_config(robot_path, robot_overrides)
         robot = make_robot(robot_cfg)
-        robot.connect()
+        # robot.connect()
 
-        calib_kwgs = init_sim_calibration(robot, env_cfg.calibration)
+        # calib_kwgs = init_sim_calibration(robot, env_cfg.calibration)
 
-        def process_leader_actions_fn(action):
-            return real_positions_to_sim(action, **calib_kwgs)
+        # def process_leader_actions_fn(action):
+        #     return real_positions_to_sim(action, **calib_kwgs)
 
-        robot.leader_arms.main.calibration = None
+        # robot.leader_arms.main.calibration = None
 
     if control_mode == "teleoperate":
-        teleoperate(env_constructor, robot, process_leader_actions_fn)
+        teleoperate(env, robot, process_leader_actions_fn)
 
     elif control_mode == "record":
-        record(env_constructor, robot, process_leader_actions_fn, **kwargs)
+        record(env, robot, **kwargs)
 
     elif control_mode == "replay":
-        replay(env_constructor, **kwargs)
+        replay(env, **kwargs)
 
     else:
         raise ValueError(
