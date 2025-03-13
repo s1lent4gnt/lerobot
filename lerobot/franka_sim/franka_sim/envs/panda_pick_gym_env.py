@@ -8,6 +8,10 @@ import numpy as np
 from gymnasium import spaces
 from gymnasium.spaces import Box
 
+import logging
+import torch
+
+
 try:
     import mujoco_py
 except ImportError as e:
@@ -31,6 +35,8 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
     def __init__(
         self,
+        use_delta_action_space: bool = True,
+        delta: float | None = None,
         action_scale: np.ndarray = np.asarray([0.05, 1]),
         seed: int = 0,
         control_dt: float = 0.02,
@@ -41,9 +47,6 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         image_obs: bool = False,
         reward_type: str = "sparse",
     ):
-        self._action_scale = action_scale
-        self.reward_type = reward_type
-
         super().__init__(
             xml_path=_XML_PATH,
             seed=seed,
@@ -61,6 +64,8 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
             "render_fps": int(np.round(1.0 / self.control_dt)),
         }
 
+        self._action_scale = action_scale
+        self.reward_type = reward_type
         self.render_mode = render_mode
         camera_name_1 = "front"
         camera_name_2 = "handcam_rgb"
@@ -76,67 +81,101 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self._panda_ctrl_ids = np.asarray(
             [self._model.actuator(f"actuator{i}").id for i in range(1, 8)]
         )
+
         self._gripper_ctrl_id = self._model.actuator("fingers_actuator").id
         self._pinch_site_id = self._model.site("pinch").id
         self._block_z = self._model.geom("block").size[2]
 
+        self.initial_follower_position = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+
+        # Episode tracking.
+        self.current_step = 0
+        self.episode_data = None
+
+        self.delta = delta
+        self.use_delta_action_space = use_delta_action_space
+        self.current_joint_positions = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+
+        # # Retrieve the size of the joint position interval bound.
+        # self.relative_bounds_size = (
+        #     (
+        #         self.cfg.config.joint_position_relative_bounds["max"]
+        #         - self.cfg.config.joint_position_relative_bounds["min"]
+        #     )
+        #     if self.cfg.config.joint_position_relative_bounds is not None
+        #     else None
+        # )
+
+        # self.cfg.config.max_relative_target = (
+        #     self.relative_bounds_size.float()
+        #     if self.relative_bounds_size is not None
+        #     else None
+        # )
+        
+
         self.observation_space = spaces.Dict(
             {
-                "state": spaces.Dict(
+                "observation.state": spaces.Dict(
                     {
-                        "tcp_pose": spaces.Box(
+                        "qpos": spaces.Box(
                             -np.inf, np.inf, shape=(7,), dtype=np.float32
-                        ),
-                        "tcp_vel": spaces.Box(
-                            -np.inf, np.inf, shape=(6,), dtype=np.float32
-                        ),
-                        "gripper_pose": spaces.Box(
-                            -1, 1, shape=(1,), dtype=np.float32
-                        ),
+                        )
                     }
+                ),
+                "observation.images.front": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(render_spec.height, render_spec.width, 3),
+                    dtype=np.uint8,
+                ),
+                "observation.images.wrist": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(render_spec.height, render_spec.width, 3),
+                    dtype=np.uint8,
                 ),
             }
         )
 
-        if self.image_obs:
-            self.observation_space = spaces.Dict(
-                {
-                    "state": spaces.Dict(
-                        {
-                            "tcp_pose": spaces.Box(
-                                -np.inf, np.inf, shape=(7,), dtype=np.float32
-                            ),
-                            "tcp_vel": spaces.Box(
-                                -np.inf, np.inf, shape=(6,), dtype=np.float32
-                            ),
-                            "gripper_pose": spaces.Box(
-                                -1, 1, shape=(1,), dtype=np.float32
-                            ),
-                        }
-                    ),
-                    "image": spaces.Dict(
-                        {
-                            "front": spaces.Box(
-                                low=0,
-                                high=255,
-                                shape=(render_spec.height, render_spec.width, 3),
-                                dtype=np.uint8,
-                            ),
-                            "wrist": spaces.Box(
-                                low=0,
-                                high=255,
-                                shape=(render_spec.height, render_spec.width, 3),
-                                dtype=np.uint8,
-                            ),
-                        }
-                    ),
-                }
+        # Define the action space for joint positions along with setting an intervention flag.
+        action_dim = 7
+        if self.use_delta_action_space:
+            bounds = (
+                self.relative_bounds_size
+                if self.relative_bounds_size is not None
+                else np.ones(action_dim) * 1000
+            )
+            action_space_robot = gym.spaces.Box(
+                low=-bounds,
+                high=bounds,
+                shape=(action_dim,),
+                dtype=np.float32,
+            )
+        else:
+            bounds_min = (
+                np.ones(action_dim) * -1000
+                # self.cfg.config.joint_position_relative_bounds["min"].cpu().numpy()
+                # if self.cfg.config.joint_position_relative_bounds is not None
+                # else np.ones(action_dim) * -1000
+            )
+            bounds_max = (
+                np.ones(action_dim) * 1000
+                # self.cfg.config.joint_position_relative_bounds["max"].cpu().numpy()
+                # if self.cfg.config.joint_position_relative_bounds is not None
+                # else np.ones(action_dim) * 1000
+            )
+            action_space_robot = gym.spaces.Box(
+                low=bounds_min,
+                high=bounds_max,
+                shape=(action_dim,),
+                dtype=np.float32,
             )
 
-        self.action_space = spaces.Box(
-            low=np.asarray([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]),
-            high=np.asarray([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            dtype=np.float32,
+        self.action_space = gym.spaces.Tuple(
+            (
+                action_space_robot,
+                gym.spaces.Discrete(2),
+            ),
         )
 
         self._viewer = mujoco.Renderer(
@@ -169,6 +208,10 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self._z_init = self._data.sensor("block_pos").data[2]
         self._z_success = self._z_init + 0.2
 
+        # Reset episode tracking variables.
+        self.current_step = 0
+        self.episode_data = None
+
         obs = self._compute_observation()
         return obs, {}
 
@@ -187,41 +230,84 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
             truncated: bool,
             info: dict[str, Any]
         """
-        x, y, z, rx, ry, rz, grasp = action
 
-        # Set the mocap position.
-        pos = self._data.mocap_pos[0].copy()
-        dpos = np.asarray([x, y, z]) * self._action_scale[0]
-        npos = np.clip(pos + dpos, *_CARTESIAN_BOUNDS)
-        self._data.mocap_pos[0] = npos
-
-        # Set gripper grasp.
-        g = self._data.ctrl[self._gripper_ctrl_id] / 255
-        dg = grasp * self._action_scale[1]
-        ng = np.clip(g + dg, 0.0, 1.0)
-        self._data.ctrl[self._gripper_ctrl_id] = ng * 255
-
-        for _ in range(self._n_substeps):
-            tau = opspace(
-                model=self._model,
-                data=self._data,
-                site_id=self._pinch_site_id,
-                dof_ids=self._panda_dof_ids,
-                pos=self._data.mocap_pos[0],
-                ori=self._data.mocap_quat[0],
-                joint=_PANDA_HOME,
-                gravity_comp=True,
+        policy_action, intervention_bool = action
+        teleop_action = None
+        self.current_joint_positions = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+        if isinstance(policy_action, torch.Tensor):
+            policy_action = policy_action.cpu().numpy()
+            policy_action = np.clip(
+                policy_action, self.action_space[0].low, self.action_space[0].high
             )
-            self._data.ctrl[self._panda_ctrl_ids] = tau
-            mujoco.mj_step(self._model, self._data)
-        obs = self._compute_observation()
-        rew = self._compute_reward()
-        success = self._is_success()
-        block_pos = self._data.sensor("block_pos").data
-        outside_bounds = np.any(block_pos[:2] < (_SAMPLING_BOUNDS[0] - 0.05)) or np.any(block_pos[:2] > (_SAMPLING_BOUNDS[1] + 0.05))
-        terminated = self.time_limit_exceeded() or success or outside_bounds
+            logging.info(f"Before clipping policy action: {policy_action}")
 
-        return obs, rew, terminated, False, {"succeed": success}
+        if not intervention_bool:
+            if self.use_delta_action_space:
+                target_joint_positions = (
+                    self.current_joint_positions + self.delta * policy_action
+                )
+            else:
+                target_joint_positions = policy_action
+
+            for _ in range(self._n_substeps):
+                self._data.ctrl[self._panda_ctrl_ids] = target_joint_positions
+                mujoco.mj_step(self._model, self._data)
+
+            observation = self._compute_observation()
+        # else:
+        #     # NOTE: No need for this with the gamepad
+        #     pass
+
+            # observation, teleop_action = self.robot.teleop_step(record_data=True)
+            # teleop_action = teleop_action[
+            #     "action"
+            # ]  # Convert tensor to appropriate format
+
+            # # When applying the delta action space, convert teleop absolute values to relative differences.
+            # if self.use_delta_action_space:
+            #     logging.info(f"Absolute teleop action: {teleop_action}")
+            #     teleop_action = (
+            #         teleop_action - self.current_joint_positions
+            #     ) / self.delta
+            #     logging.info(f"Relative teleop action: {teleop_action}")
+            #     if self.relative_bounds_size is not None and (
+            #         torch.any(teleop_action < -self.relative_bounds_size)
+            #         and torch.any(teleop_action > self.relative_bounds_size)
+            #     ):
+            #         logging.debug(
+            #             f"Relative teleop delta exceeded bounds {self.relative_bounds_size}, teleop_action {teleop_action}\n"
+            #             f"lower bounds condition {teleop_action < -self.relative_bounds_size}\n"
+            #             f"upper bounds condition {teleop_action > self.relative_bounds_size}"
+            #         )
+
+            #         teleop_action = torch.clamp(
+            #             teleop_action,
+            #             -self.relative_bounds_size,
+            #             self.relative_bounds_size,
+            #         )
+            # # NOTE: To mimic the shape of a neural network output, we add a batch dimension to the teleop action.
+            # if teleop_action.dim() == 1:
+            #     teleop_action = teleop_action.unsqueeze(0)
+
+            # self.render()
+
+            self.current_step += 1
+
+            reward = 0.0
+            terminated = False
+            truncated = False
+
+            return (
+                observation,
+                reward,
+                terminated,
+                truncated,
+                {
+                    "action_intervention": teleop_action,
+                    "is_intervention": teleop_action is not None,
+                },
+            )
+
 
     def render(self):
         rendered_frames = []
@@ -235,52 +321,15 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
     def _compute_observation(self) -> dict:
         obs = {}
-        obs["state"] = {}
+        obs["observation.state"] = {}
 
-        tcp_pos = self._data.sensor("2f85/pinch_pos").data
-        tcp_quat = self._data.sensor("2f85/pinch_quat").data
+        qpos = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+        obs["observation.state"] = torch.from_numpy(qpos)
 
-        obs["state"]["tcp_pose"] = np.concatenate([tcp_pos, tcp_quat]).astype(np.float32)
-
-        tcp_vel = self._data.sensor("2f85/pinch_vel").data
-        tcp_angvel = self._data.sensor("2f85/pinch_angvel").data
-        obs["state"]["tcp_vel"] = np.concatenate([tcp_vel, tcp_angvel]).astype(np.float32)
-
-        gripper_pose = np.array(
-            self._data.ctrl[self._gripper_ctrl_id] / 255, dtype=np.float32
-        )
-        obs["state"]["gripper_pose"] = gripper_pose
-
-        if self.image_obs:
-            obs["image"] = {}
-            obs["image"]["front"], obs["image"]["wrist"] = self.render()
-        else:
-            block_pos = self._data.sensor("block_pos").data.astype(np.float32)
-            obs["state"]["block_pos"] = block_pos
+        front, wrist = self.render()
+        obs["observation.images.front"], obs["observation.images.wrist"] = torch.from_numpy(front), torch.from_numpy(wrist)
 
         return obs
-
-    def _compute_reward(self) -> float:
-        if self.reward_type == "dense":
-            block_pos = self._data.sensor("block_pos").data
-            tcp_pos = self._data.sensor("2f85/pinch_pos").data
-            dist = np.linalg.norm(block_pos - tcp_pos)
-            r_close = np.exp(-20 * dist)
-            r_lift = (block_pos[2] - self._z_init) / (self._z_success - self._z_init)
-            r_lift = np.clip(r_lift, 0.0, 1.0)
-            rew = 0.3 * r_close + 0.7 * r_lift
-            return rew
-        else:
-            block_pos = self._data.sensor("block_pos").data
-            lift = block_pos[2] - self._z_init
-            return float(lift > 0.2)
-
-    def _is_success(self) -> bool:
-        block_pos = self._data.sensor("block_pos").data
-        tcp_pos = self._data.sensor("2f85/pinch_pos").data
-        dist = np.linalg.norm(block_pos - tcp_pos)
-        lift = block_pos[2] - self._z_init
-        return dist < 0.05 and lift > 0.2
 
 
 if __name__ == "__main__":

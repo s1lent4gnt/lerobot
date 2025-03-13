@@ -23,6 +23,8 @@ from lerobot.scripts.server.kinematics import RobotKinematics
 
 logging.basicConfig(level=logging.INFO)
 
+from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv
+
 
 class HILSerlRobotEnv(gym.Env):
     """
@@ -1111,67 +1113,77 @@ def make_robot_env(
         )
         return env
     # Create base environment
-    env = HILSerlRobotEnv(
-        robot=robot,
-        display_cameras=cfg.env.wrapper.display_cameras,
+    # env = HILSerlRobotEnv(
+    #     robot=robot,
+    #     display_cameras=cfg.env.wrapper.display_cameras,
+    #     delta=cfg.env.wrapper.delta_action,
+    #     use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions
+    #     and cfg.env.wrapper.ee_action_space_params is None,
+    # )
+
+    env = PandaPickCubeGymEnv(
         delta=cfg.env.wrapper.delta_action,
-        use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions
-        and cfg.env.wrapper.ee_action_space_params is None,
+        use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions,
+        render_mode="human",
+        image_obs=True,
+        reward_type="sparse",
+        time_limit=100.0,
+        control_dt=0.1
     )
 
     # Add observation and image processing
-    if cfg.env.wrapper.add_joint_velocity_to_observation:
-        env = AddJointVelocityToObservation(env=env, fps=cfg.fps)
-    if cfg.env.wrapper.add_ee_pose_to_observation:
-        env = EEObservationWrapper(
-            env=env, ee_pose_limits=cfg.env.wrapper.ee_action_space_params.bounds
-        )
+    # if cfg.env.wrapper.add_joint_velocity_to_observation:
+    #     env = AddJointVelocityToObservation(env=env, fps=cfg.fps)
+    # if cfg.env.wrapper.add_ee_pose_to_observation:
+    #     env = EEObservationWrapper(
+    #         env=env, ee_pose_limits=cfg.env.wrapper.ee_action_space_params.bounds
+    #     )
 
-    env = ConvertToLeRobotObservation(env=env, device=cfg.env.device)
+    # env = ConvertToLeRobotObservation(env=env, device=cfg.env.device)
 
-    if cfg.env.wrapper.crop_params_dict is not None:
-        env = ImageCropResizeWrapper(
-            env=env,
-            crop_params_dict=cfg.env.wrapper.crop_params_dict,
-            resize_size=cfg.env.wrapper.resize_size,
-        )
+    # if cfg.env.wrapper.crop_params_dict is not None:
+    #     env = ImageCropResizeWrapper(
+    #         env=env,
+    #         crop_params_dict=cfg.env.wrapper.crop_params_dict,
+    #         resize_size=cfg.env.wrapper.resize_size,
+    #     )
 
-    # Add reward computation and control wrappers
-    # env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
-    env = TimeLimitWrapper(
-        env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
-    )
-    if cfg.env.wrapper.ee_action_space_params is not None:
-        env = EEActionWrapper(
-            env=env, ee_action_space_params=cfg.env.wrapper.ee_action_space_params
-        )
-    if cfg.env.wrapper.ee_action_space_params.use_gamepad:
-        env = GamepadControlWrapper(
-            env=env,
-            x_step_size=cfg.env.wrapper.ee_action_space_params.x_step_size,
-            y_step_size=cfg.env.wrapper.ee_action_space_params.y_step_size,
-            z_step_size=cfg.env.wrapper.ee_action_space_params.z_step_size,
-        )
-    else:
-        env = KeyboardInterfaceWrapper(env=env)
+    # # Add reward computation and control wrappers
+    # # env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
+    # env = TimeLimitWrapper(
+    #     env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
+    # )
+    # if cfg.env.wrapper.ee_action_space_params is not None:
+    #     env = EEActionWrapper(
+    #         env=env, ee_action_space_params=cfg.env.wrapper.ee_action_space_params
+    #     )
+    # if cfg.env.wrapper.ee_action_space_params.use_gamepad:
+    #     env = GamepadControlWrapper(
+    #         env=env,
+    #         x_step_size=cfg.env.wrapper.ee_action_space_params.x_step_size,
+    #         y_step_size=cfg.env.wrapper.ee_action_space_params.y_step_size,
+    #         z_step_size=cfg.env.wrapper.ee_action_space_params.z_step_size,
+    #     )
+    # else:
+    #     env = KeyboardInterfaceWrapper(env=env)
 
-    env = ResetWrapper(
-        env=env,
-        reset_pose=cfg.env.wrapper.fixed_reset_joint_positions,
-        reset_time_s=cfg.env.wrapper.reset_time_s,
-    )
-    if cfg.env.wrapper.ee_action_space_params is None:
-        env = JointMaskingActionSpace(
-            env=env, mask=cfg.env.wrapper.joint_masking_action_space
-        )
-    env = BatchCompitableWrapper(env=env)
+    # env = ResetWrapper(
+    #     env=env,
+    #     reset_pose=cfg.env.wrapper.fixed_reset_joint_positions,
+    #     reset_time_s=cfg.env.wrapper.reset_time_s,
+    # )
+    # if cfg.env.wrapper.ee_action_space_params is None:
+    #     env = JointMaskingActionSpace(
+    #         env=env, mask=cfg.env.wrapper.joint_masking_action_space
+    #     )
+    # env = BatchCompitableWrapper(env=env)
 
     return env
 
     # batched version of the env that returns an observation of shape (b, c)
 
 
-def get_classifier(pretrained_path, config_path, device="mps"):
+def get_classifier(pretrained_path, config_path, device="cuda"):
     if pretrained_path is None or config_path is None:
         return None
 
