@@ -1151,7 +1151,8 @@ def make_robot_env(
         )
 
     # Add reward computation and control wrappers
-    env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
+    if reward_classifier is not None:
+        env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
