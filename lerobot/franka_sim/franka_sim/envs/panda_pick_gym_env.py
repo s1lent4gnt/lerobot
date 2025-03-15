@@ -35,6 +35,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
     def __init__(
         self,
+        cfg,
         use_delta_action_space: bool = True,
         delta: float | None = None,
         action_scale: np.ndarray = np.asarray([0.05, 1]),
@@ -75,10 +76,10 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self.image_obs = image_obs
         
         # Caching.
-        self._panda_dof_ids = np.asarray(
+        self.panda_dof_ids = np.asarray(
             [self._model.joint(f"joint{i}").id for i in range(1, 8)]
         )
-        self._panda_ctrl_ids = np.asarray(
+        self.panda_ctrl_ids = np.asarray(
             [self._model.actuator(f"actuator{i}").id for i in range(1, 8)]
         )
 
@@ -86,31 +87,33 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self._pinch_site_id = self._model.site("pinch").id
         self._block_z = self._model.geom("block").size[2]
 
-        self.initial_follower_position = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+        self.initial_follower_position = self.data.qpos[self.panda_dof_ids].astype(np.float32)
 
         # Episode tracking.
         self.current_step = 0
         self.episode_data = None
 
+        self.cfg = cfg
+
         self.delta = delta
         self.use_delta_action_space = use_delta_action_space
-        self.current_joint_positions = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+        self.current_joint_positions = self.data.qpos[self.panda_dof_ids].astype(np.float32)
 
-        # # Retrieve the size of the joint position interval bound.
-        # self.relative_bounds_size = (
-        #     (
-        #         self.cfg.config.joint_position_relative_bounds["max"]
-        #         - self.cfg.config.joint_position_relative_bounds["min"]
-        #     )
-        #     if self.cfg.config.joint_position_relative_bounds is not None
-        #     else None
-        # )
+        # Retrieve the size of the joint position interval bound.
+        self.relative_bounds_size = (
+            (
+                self.cfg.robot.joint_position_relative_bounds["max"]
+                - self.cfg.robot.joint_position_relative_bounds["min"]
+            )
+            if self.cfg.robot.joint_position_relative_bounds is not None
+            else None
+        )
 
-        # self.cfg.config.max_relative_target = (
-        #     self.relative_bounds_size.float()
-        #     if self.relative_bounds_size is not None
-        #     else None
-        # )
+        self.cfg.robot.max_relative_target = (
+            self.relative_bounds_size.float()
+            if self.relative_bounds_size is not None
+            else None
+        )
         
 
         self.observation_space = spaces.Dict(
@@ -153,16 +156,14 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
             )
         else:
             bounds_min = (
-                np.ones(action_dim) * -1000
-                # self.cfg.config.joint_position_relative_bounds["min"].cpu().numpy()
-                # if self.cfg.config.joint_position_relative_bounds is not None
-                # else np.ones(action_dim) * -1000
+                self.cfg.robot.joint_position_relative_bounds["min"].cpu().numpy()
+                if self.cfg.robot.joint_position_relative_bounds is not None
+                else np.ones(action_dim) * -1000
             )
             bounds_max = (
-                np.ones(action_dim) * 1000
-                # self.cfg.config.joint_position_relative_bounds["max"].cpu().numpy()
-                # if self.cfg.config.joint_position_relative_bounds is not None
-                # else np.ones(action_dim) * 1000
+                self.cfg.robot.joint_position_relative_bounds["max"].cpu().numpy()
+                if self.cfg.robot.joint_position_relative_bounds is not None
+                else np.ones(action_dim) * 1000
             )
             action_space_robot = gym.spaces.Box(
                 low=bounds_min,
@@ -192,7 +193,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         mujoco.mj_resetData(self._model, self._data)
 
         # Reset arm to home position.
-        self._data.qpos[self._panda_dof_ids] = _PANDA_HOME
+        self._data.qpos[self.panda_dof_ids] = _PANDA_HOME
         mujoco.mj_forward(self._model, self._data)
 
         # Reset mocap body to home position.
@@ -233,7 +234,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
         policy_action, intervention_bool = action
         teleop_action = None
-        self.current_joint_positions = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+        self.current_joint_positions = self.data.qpos[self.panda_dof_ids].astype(np.float32)
         if isinstance(policy_action, torch.Tensor):
             policy_action = policy_action.cpu().numpy()
             policy_action = np.clip(
@@ -249,64 +250,58 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
             else:
                 target_joint_positions = policy_action
 
-            for _ in range(self._n_substeps):
-                self._data.ctrl[self._panda_ctrl_ids] = target_joint_positions
-                mujoco.mj_step(self._model, self._data)
+            self._data.ctrl[self.panda_ctrl_ids] = target_joint_positions
+            mujoco.mj_step(self._model, self._data)
 
             observation = self._compute_observation()
-        # else:
-        #     # NOTE: No need for this with the gamepad
-        #     pass
+        else:
+            observation, teleop_action = self.robot.teleop_step(record_data=True)
+            teleop_action = teleop_action[
+                "action"
+            ]  # Convert tensor to appropriate format
 
-            # observation, teleop_action = self.robot.teleop_step(record_data=True)
-            # teleop_action = teleop_action[
-            #     "action"
-            # ]  # Convert tensor to appropriate format
+            # When applying the delta action space, convert teleop absolute values to relative differences.
+            if self.use_delta_action_space:
+                logging.info(f"Absolute teleop action: {teleop_action}")
+                teleop_action = (
+                    teleop_action - self.current_joint_positions
+                ) / self.delta
+                logging.info(f"Relative teleop action: {teleop_action}")
+                if self.relative_bounds_size is not None and (
+                    torch.any(teleop_action < -self.relative_bounds_size)
+                    and torch.any(teleop_action > self.relative_bounds_size)
+                ):
+                    logging.debug(
+                        f"Relative teleop delta exceeded bounds {self.relative_bounds_size}, teleop_action {teleop_action}\n"
+                        f"lower bounds condition {teleop_action < -self.relative_bounds_size}\n"
+                        f"upper bounds condition {teleop_action > self.relative_bounds_size}"
+                    )
 
-            # # When applying the delta action space, convert teleop absolute values to relative differences.
-            # if self.use_delta_action_space:
-            #     logging.info(f"Absolute teleop action: {teleop_action}")
-            #     teleop_action = (
-            #         teleop_action - self.current_joint_positions
-            #     ) / self.delta
-            #     logging.info(f"Relative teleop action: {teleop_action}")
-            #     if self.relative_bounds_size is not None and (
-            #         torch.any(teleop_action < -self.relative_bounds_size)
-            #         and torch.any(teleop_action > self.relative_bounds_size)
-            #     ):
-            #         logging.debug(
-            #             f"Relative teleop delta exceeded bounds {self.relative_bounds_size}, teleop_action {teleop_action}\n"
-            #             f"lower bounds condition {teleop_action < -self.relative_bounds_size}\n"
-            #             f"upper bounds condition {teleop_action > self.relative_bounds_size}"
-            #         )
+                    teleop_action = torch.clamp(
+                        teleop_action,
+                        -self.relative_bounds_size,
+                        self.relative_bounds_size,
+                    )
+            # NOTE: To mimic the shape of a neural network output, we add a batch dimension to the teleop action.
+            if teleop_action.dim() == 1:
+                teleop_action = teleop_action.unsqueeze(0)
 
-            #         teleop_action = torch.clamp(
-            #             teleop_action,
-            #             -self.relative_bounds_size,
-            #             self.relative_bounds_size,
-            #         )
-            # # NOTE: To mimic the shape of a neural network output, we add a batch dimension to the teleop action.
-            # if teleop_action.dim() == 1:
-            #     teleop_action = teleop_action.unsqueeze(0)
+        self.current_step += 1
 
-            # self.render()
+        reward = 0.0
+        terminated = False
+        truncated = False
 
-            self.current_step += 1
-
-            reward = 0.0
-            terminated = False
-            truncated = False
-
-            return (
-                observation,
-                reward,
-                terminated,
-                truncated,
-                {
-                    "action_intervention": teleop_action,
-                    "is_intervention": teleop_action is not None,
-                },
-            )
+        return (
+            observation,
+            reward,
+            terminated,
+            truncated,
+            {
+                "action_intervention": teleop_action,
+                "is_intervention": teleop_action is not None,
+            },
+        )
 
 
     def render(self):
@@ -323,19 +318,10 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         obs = {}
         obs["observation.state"] = {}
 
-        qpos = self.data.qpos[self._panda_dof_ids].astype(np.float32)
+        qpos = self.data.qpos[self.panda_dof_ids].astype(np.float32)
         obs["observation.state"] = torch.from_numpy(qpos)
 
         front, wrist = self.render()
         obs["observation.images.front"], obs["observation.images.wrist"] = torch.from_numpy(front), torch.from_numpy(wrist)
 
         return obs
-
-
-if __name__ == "__main__":
-    env = PandaPickCubeGymEnv(render_mode="human")
-    env.reset()
-    for i in range(100):
-        env.step(np.random.uniform(-1, 1, 4))
-        env.render()
-    env.close()

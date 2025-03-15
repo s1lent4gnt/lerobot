@@ -23,8 +23,9 @@ from lerobot.scripts.server.kinematics import RobotKinematics
 
 logging.basicConfig(level=logging.INFO)
 
-from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv
-
+from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv, _PANDA_HOME
+from lerobot.franka_sim.franka_sim.controllers import opspace
+import mujoco
 
 class HILSerlRobotEnv(gym.Env):
     """
@@ -335,11 +336,9 @@ class AddJointVelocityToObservation(gym.ObservationWrapper):
         super().__init__(env)
 
         # Extend observation space to include joint velocities
-        old_low = self.observation_space["observation.state"]["observation.state"].low
-        old_high = self.observation_space["observation.state"]["observation.state"].high
-        old_shape = self.observation_space["observation.state"][
-            "observation.state"
-        ].shape
+        old_low = self.observation_space["observation.state"]["qpos"].low
+        old_high = self.observation_space["observation.state"]["qpos"].high
+        old_shape = self.observation_space["observation.state"]["qpos"].shape
 
         self.last_joint_positions = np.zeros(old_shape)
 
@@ -352,7 +351,7 @@ class AddJointVelocityToObservation(gym.ObservationWrapper):
 
         new_shape = (old_shape[0] * 2,)
 
-        self.observation_space["observation.state"]["observation.state"] = (
+        self.observation_space["observation.state"]["qpos"] = (
             gym.spaces.Box(
                 low=new_low,
                 high=new_high,
@@ -773,7 +772,6 @@ class KeyboardInterfaceWrapper(gym.Wrapper):
             self.listener.stop()
         super().close()
 
-
 class ResetWrapper(gym.Wrapper):
     def __init__(
         self,
@@ -784,25 +782,27 @@ class ResetWrapper(gym.Wrapper):
         super().__init__(env)
         self.reset_time_s = reset_time_s
         self.reset_pose = reset_pose
-        self.robot = self.unwrapped.robot
 
     def reset(self, *, seed=None, options=None):
         if self.reset_pose is not None:
             start_time = time.perf_counter()
             log_say("Reset the environment.", play_sounds=True)
-            reset_follower_position(self.robot, self.reset_pose)
+            self.env.data.qpos[self.env.panda_dof_ids] = self.reset_pose
+            mujoco.mj_forward(self.env.model, self.env.data)
             busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
             log_say("Reset the environment done.", play_sounds=True)
         else:
-            log_say(
-                f"Manually reset the environment for {self.reset_time_s} seconds.",
-                play_sounds=True,
-            )
-            start_time = time.perf_counter()
-            while time.perf_counter() - start_time < self.reset_time_s:
-                self.robot.teleop_step()
+            # log_say(
+            #     f"Manually reset the environment for {self.reset_time_s} seconds.",
+            #     play_sounds=True,
+            # )
+            # start_time = time.perf_counter()
+            # while time.perf_counter() - start_time < self.reset_time_s:
+            #     self.robot.teleop_step()
 
-            log_say("Manual reseting of the environment done.", play_sounds=True)
+            # log_say("Manual reseting of the environment done.", play_sounds=True)
+            # TODO (lilkm): add manual reset
+            pass
         return super().reset(seed=seed, options=options)
 
 
@@ -828,8 +828,6 @@ class EEActionWrapper(gym.ActionWrapper):
         super().__init__(env)
         self.ee_action_space_params = ee_action_space_params
 
-        self.fk_function = RobotKinematics.fk_gripper_tip
-
         action_space_bounds = np.array(
             [
                 ee_action_space_params.x_step_size,
@@ -854,27 +852,44 @@ class EEActionWrapper(gym.ActionWrapper):
 
     def action(self, action):
         is_intervention = False
-        desired_ee_pos = np.eye(4)
         if isinstance(action, tuple):
             action, _ = action
 
-        current_joint_pos = self.unwrapped.robot.follower_arms["main"].read(
-            "Present_Position"
-        )
-        current_ee_pos = self.fk_function(current_joint_pos)
         if isinstance(action, torch.Tensor):
             action = action.cpu().numpy()
-        desired_ee_pos[:3, 3] = np.clip(
-            current_ee_pos[:3, 3] + action,
-            self.bounds["min"],
-            self.bounds["max"],
+
+        # Set the mocap position.
+        current_ee_pos = self.env.data.mocap_pos[0].copy()
+        npos = np.clip(current_ee_pos + action * 0.05, self.bounds["min"], self.bounds["max"])
+        self.env.data.mocap_pos[0] = npos
+
+        # TODO (lilkm): No gripper, add gripper continuous
+
+        for _ in range(9):
+            target_joint_pos = opspace(
+                model=self.env.model,
+                data=self.env.data,
+                site_id=self.env.model.site("pinch").id,
+                dof_ids=self.env.panda_dof_ids,
+                pos=self.env.data.mocap_pos[0],
+                ori=self.env.data.mocap_quat[0],
+                joint=_PANDA_HOME,
+                gravity_comp=True,
+            )
+            self.env.data.ctrl[self.env.panda_ctrl_ids] = target_joint_pos
+            mujoco.mj_step(self.env.model, self.env.data)
+
+        target_joint_pos = opspace(
+            model=self.env.model,
+            data=self.env.data,
+            site_id=self.env.model.site("pinch").id,
+            dof_ids=self.env.panda_dof_ids,
+            pos=self.env.data.mocap_pos[0],
+            ori=self.env.data.mocap_quat[0],
+            joint=_PANDA_HOME,
+            gravity_comp=True,
         )
-        target_joint_pos = RobotKinematics.ik(
-            current_joint_pos,
-            desired_ee_pos,
-            position_only=True,
-            fk_func=self.fk_function,
-        )
+
         return target_joint_pos, is_intervention
 
 
@@ -883,9 +898,8 @@ class EEObservationWrapper(gym.ObservationWrapper):
         super().__init__(env)
 
         # Extend observation space to include end effector pose
-        prev_space = self.observation_space["observation.state"]["observation.state"]
-
-        self.observation_space["observation.state"]["observation.state"] = (
+        prev_space = self.observation_space["observation.state"]["qpos"]
+        self.observation_space["observation.state"]["qpos"] = (
             gym.spaces.Box(
                 low=np.concatenate([prev_space.low, ee_pose_limits["min"]]),
                 high=np.concatenate([prev_space.high, ee_pose_limits["max"]]),
@@ -894,17 +908,12 @@ class EEObservationWrapper(gym.ObservationWrapper):
             )
         )
 
-        self.fk_function = RobotKinematics.fk_gripper_tip
-
     def observation(self, observation):
-        current_joint_pos = self.unwrapped.robot.follower_arms["main"].read(
-            "Present_Position"
-        )
-        current_ee_pos = self.fk_function(current_joint_pos)
+        current_ee_pos = self.env.data.sensor("2f85/pinch_pos").data
         observation["observation.state"] = torch.cat(
             [
                 observation["observation.state"],
-                torch.from_numpy(current_ee_pos[:3, 3]),
+                torch.from_numpy(current_ee_pos),
             ],
             dim=-1,
         )
@@ -1113,15 +1122,8 @@ def make_robot_env(
         )
         return env
     # Create base environment
-    # env = HILSerlRobotEnv(
-    #     robot=robot,
-    #     display_cameras=cfg.env.wrapper.display_cameras,
-    #     delta=cfg.env.wrapper.delta_action,
-    #     use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions
-    #     and cfg.env.wrapper.ee_action_space_params is None,
-    # )
-
     env = PandaPickCubeGymEnv(
+        cfg=cfg,
         delta=cfg.env.wrapper.delta_action,
         use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions,
         render_mode="human",
@@ -1132,51 +1134,51 @@ def make_robot_env(
     )
 
     # Add observation and image processing
-    # if cfg.env.wrapper.add_joint_velocity_to_observation:
-    #     env = AddJointVelocityToObservation(env=env, fps=cfg.fps)
-    # if cfg.env.wrapper.add_ee_pose_to_observation:
-    #     env = EEObservationWrapper(
-    #         env=env, ee_pose_limits=cfg.env.wrapper.ee_action_space_params.bounds
-    #     )
+    if cfg.env.wrapper.add_joint_velocity_to_observation:
+        env = AddJointVelocityToObservation(env=env, fps=cfg.fps)
+    if cfg.env.wrapper.add_ee_pose_to_observation:
+        env = EEObservationWrapper(
+            env=env, ee_pose_limits=cfg.env.wrapper.ee_action_space_params.bounds
+        )
 
-    # env = ConvertToLeRobotObservation(env=env, device=cfg.env.device)
+    env = ConvertToLeRobotObservation(env=env, device=cfg.env.device)
 
-    # if cfg.env.wrapper.crop_params_dict is not None:
-    #     env = ImageCropResizeWrapper(
-    #         env=env,
-    #         crop_params_dict=cfg.env.wrapper.crop_params_dict,
-    #         resize_size=cfg.env.wrapper.resize_size,
-    #     )
+    if cfg.env.wrapper.crop_params_dict is not None:
+        env = ImageCropResizeWrapper(
+            env=env,
+            crop_params_dict=cfg.env.wrapper.crop_params_dict,
+            resize_size=cfg.env.wrapper.resize_size,
+        )
 
-    # # Add reward computation and control wrappers
-    # # env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
-    # env = TimeLimitWrapper(
-    #     env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
-    # )
-    # if cfg.env.wrapper.ee_action_space_params is not None:
-    #     env = EEActionWrapper(
-    #         env=env, ee_action_space_params=cfg.env.wrapper.ee_action_space_params
-    #     )
-    # if cfg.env.wrapper.ee_action_space_params.use_gamepad:
-    #     env = GamepadControlWrapper(
-    #         env=env,
-    #         x_step_size=cfg.env.wrapper.ee_action_space_params.x_step_size,
-    #         y_step_size=cfg.env.wrapper.ee_action_space_params.y_step_size,
-    #         z_step_size=cfg.env.wrapper.ee_action_space_params.z_step_size,
-    #     )
-    # else:
-    #     env = KeyboardInterfaceWrapper(env=env)
+    # Add reward computation and control wrappers
+    env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
+    env = TimeLimitWrapper(
+        env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
+    )
+    if cfg.env.wrapper.ee_action_space_params is not None:
+        env = EEActionWrapper(
+            env=env, ee_action_space_params=cfg.env.wrapper.ee_action_space_params
+        )
+    if cfg.env.wrapper.ee_action_space_params.use_gamepad:
+        env = GamepadControlWrapper(
+            env=env,
+            x_step_size=cfg.env.wrapper.ee_action_space_params.x_step_size,
+            y_step_size=cfg.env.wrapper.ee_action_space_params.y_step_size,
+            z_step_size=cfg.env.wrapper.ee_action_space_params.z_step_size,
+        )
+    else:
+        env = KeyboardInterfaceWrapper(env=env)
 
-    # env = ResetWrapper(
-    #     env=env,
-    #     reset_pose=cfg.env.wrapper.fixed_reset_joint_positions,
-    #     reset_time_s=cfg.env.wrapper.reset_time_s,
-    # )
-    # if cfg.env.wrapper.ee_action_space_params is None:
-    #     env = JointMaskingActionSpace(
-    #         env=env, mask=cfg.env.wrapper.joint_masking_action_space
-    #     )
-    # env = BatchCompitableWrapper(env=env)
+    env = ResetWrapper(
+        env=env,
+        reset_pose=cfg.env.wrapper.fixed_reset_joint_positions,
+        reset_time_s=cfg.env.wrapper.reset_time_s,
+    )
+    if cfg.env.wrapper.ee_action_space_params is None:
+        env = JointMaskingActionSpace(
+            env=env, mask=cfg.env.wrapper.joint_masking_action_space
+        )
+    env = BatchCompitableWrapper(env=env)
 
     return env
 
