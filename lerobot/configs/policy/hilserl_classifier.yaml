@@ -4,10 +4,10 @@ defaults:
   - _self_
 
 seed: 13
-dataset_repo_id: aractingi/push_cube_square_light_reward_cropped_resized
+dataset_repo_id: lilkm/panda_robot_sim_test
 # aractingi/push_cube_square_reward_1_cropped_resized
-dataset_root: data/aractingi/push_cube_square_light_reward_cropped_resized
-local_files_only: true
+dataset_root: null
+local_files_only: false
 train_split_proportion: 0.8
 
 # Required by logger
@@ -27,7 +27,7 @@ training:
   eval_freq: 1  # How often to run validation (in epochs)
   save_freq: 1  # How often to save checkpoints (in epochs)
   save_checkpoint: true
-  image_keys: ["observation.images.front", "observation.images.side"]
+  image_keys: ["observation.image.front", "observation.image.wrist"]
   label_key: "next.reward"
   profile_inference_time: false
   profile_inference_time_iters: 20
@@ -48,6 +48,6 @@ wandb:
   job_name: "classifier_training_0"
   disable_artifact: false
 
-device: "mps"
+device: "cuda"
 resume: false
 output_dir: "outputs/classifier/old_trainer_resnet10_frozen"
