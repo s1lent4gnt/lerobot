@@ -99,6 +99,8 @@ from lerobot.common.robot_devices.robots.utils import Robot
 from lerobot.common.robot_devices.utils import busy_wait
 from lerobot.common.utils.utils import init_hydra_config, init_logging, log_say
 
+from lerobot.scripts.server.gym_manipulator import get_classifier, make_robot_env
+
 DEFAULT_FEATURES = {
     "next.reward": {
         "dtype": "float32",
@@ -212,7 +214,8 @@ def record(
     # env = env()
 
     # Create empty dataset or load existing saved episodes
-    num_cameras = sum([1 for key in env.observation_space["image"]])
+    # num_cameras = sum([1 for key in env.observation_space["image"]])
+    num_cameras = 2
 
     # get image keys
     # image_keys = [key for key in env.observation_space if "image" in key]
@@ -234,19 +237,19 @@ def record(
         features = DEFAULT_FEATURES
         # add image keys to features
         for key in image_keys:
-            shape = env.observation_space["image"][key].shape
-            if not key.startswith("observation.image."):
-                key = "observation.image." + key
+            shape = env.observation_space["observation.images." + key].shape
+            if not key.startswith("observation.images."):
+                key = "observation.images." + key
             features[key] = {"dtype": "video", "names": ["channel", "height", "width"], "shape": shape}
 
         for key, obs_key in state_keys_dict.items():
             features[key] = {
                 "dtype": "float32",
                 "names": None,
-                "shape": env.observation_space["state"][obs_key].shape,
+                "shape": env.observation_space["observation.state"][obs_key].shape,
             }
 
-        features["action"] = {"dtype": "float32", "shape": env.action_space.shape, "names": None}
+        features["action"] = {"dtype": "float32", "shape": env.action_space[0].shape, "names": None}
         features = {**features, **extra_features}
 
         # Create empty dataset or load existing saved episodes
@@ -287,7 +290,7 @@ def record(
                 if policy is not None:
                     action = predict_action(observation, policy, device, use_amp)
                 else:
-                    action = np.zeros(env.action_space.sample().shape)
+                    action = np.zeros(env.action_space[0].sample().shape)
                     # leader_pos = robot.leader_arms.main.read("Present_Position")
                     # action = process_action_from_leader(leader_pos)
 
@@ -308,25 +311,28 @@ def record(
 
                 # Overwrite environment reward with manually assigned reward
                 if assign_rewards:
-                    frame["next.reward"] = events["next.reward"]
+                    # frame["next.reward"] = events["next.reward"]
+                    print(f"REWARD = {reward}")
+                    frame["next.reward"] = reward
 
                     # Should success always be false to match what we do in control_utils?
                     frame["next.success"] = False
 
                 for key in image_keys:
-                    if not key.startswith("observation.image"):
-                        frame["observation.image." + key] = observation["image"][key]
+                    if not key.startswith("observation.images"):
+                        frame["observation.images." + key] = observation["observation.images." + key].cpu().squeeze(0).float()
                     else:
                         frame[key] = observation[key]
 
-                for key, obs_key in state_keys_dict.items():
-                    frame[key] = torch.from_numpy(observation["state"][obs_key])
+                # for key, obs_key in state_keys_dict.items():
+                # frame[key] = torch.from_numpy(observation["observation.state"])
+                frame["observation.state"] = observation["observation.state"].cpu().squeeze(0).float()
 
                 dataset.add_frame(frame)
 
                 if display_cameras and not is_headless():
                     for key in image_keys:
-                        cv2.imshow(key, cv2.cvtColor(observation["state"][key], cv2.COLOR_RGB2BGR))
+                        cv2.imshow(key, cv2.cvtColor(observation["observation.state"][key], cv2.COLOR_RGB2BGR))
                     cv2.waitKey(1)
 
                 if fps is not None:
@@ -536,15 +542,17 @@ if __name__ == "__main__":
 
     # make gym env
     env_cfg = init_hydra_config(env_config_path)
-    importlib.import_module(f"{env_cfg.env.name}")
+    # importlib.import_module(f"{env_cfg.env.name}")
 
     # def env_constructor():
     #     return gym.make(env_cfg.env.handle, disable_env_checker=True, **env_cfg.env.gym)
 
-    controller_type = ControllerType["xbox".upper()]
+    # controller_type = ControllerType["xbox".upper()]
 
-    env = gym.make("PandaPickCubeVision-v0", render_mode="human", image_obs=True)
-    env = JoystickIntervention(env, controller_type=controller_type)
+    # env = gym.make("PandaPickCubeVision-v0", render_mode="human", image_obs=True)
+    # env = JoystickIntervention(env, controller_type=controller_type)
+
+    env = make_robot_env(robot=None, reward_classifier=None, cfg=env_cfg)
 
     robot = None
     process_leader_actions_fn = None

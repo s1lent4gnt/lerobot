@@ -30,7 +30,7 @@ _CARTESIAN_BOUNDS = np.asarray([[0.2, -0.3, 0], [0.6, 0.3, 0.5]])
 _SAMPLING_BOUNDS = np.asarray([[0.3, -0.15], [0.5, 0.15]])
 
 
-class PandaPickCubeGymEnv(MujocoGymEnv):
+class PandaPushCubeGymEnv(MujocoGymEnv):
     metadata = {"render_modes": ["rgb_array", "human"]}
 
     def __init__(
@@ -194,6 +194,8 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
         # Reset arm to home position.
         self._data.qpos[self.panda_dof_ids] = _PANDA_HOME
+        # Gripper
+        self._data.ctrl[self._gripper_ctrl_id] = 255
         mujoco.mj_forward(self._model, self._data)
 
         # Reset mocap body to home position.
@@ -201,13 +203,20 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self._data.mocap_pos[0] = tcp_pos
 
         # Sample a new block position.
-        block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+        # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+        block_xy = np.array([0.5, 0.0])
         self._data.jnt("block").qpos[:3] = (*block_xy, self._block_z)
         mujoco.mj_forward(self._model, self._data)
 
         # Cache the initial block height.
         self._z_init = self._data.sensor("block_pos").data[2]
         self._z_success = self._z_init + 0.2
+
+        # Sample a new target position
+        # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+        target_region_xy = np.array([0.5, 0.10])
+        self._model.geom("target_region").pos = (*target_region_xy, 0.005)
+        mujoco.mj_forward(self._model, self._data)
 
         # Reset episode tracking variables.
         self.current_step = 0

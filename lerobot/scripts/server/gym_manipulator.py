@@ -23,9 +23,11 @@ from lerobot.scripts.server.kinematics import RobotKinematics
 
 logging.basicConfig(level=logging.INFO)
 
-from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv, _PANDA_HOME
+from lerobot.franka_sim.franka_sim.envs.panda_push_gym_env import PandaPushCubeGymEnv, _PANDA_HOME
 from lerobot.franka_sim.franka_sim.controllers import opspace
 import mujoco
+from lerobot.franka_sim.franka_sim.utils.viewer_utils import DualMujocoViewer
+
 
 class HILSerlRobotEnv(gym.Env):
     """
@@ -860,7 +862,7 @@ class EEActionWrapper(gym.ActionWrapper):
 
         # Set the mocap position.
         current_ee_pos = self.env.data.mocap_pos[0].copy()
-        npos = np.clip(current_ee_pos + action * 0.05, self.bounds["min"], self.bounds["max"])
+        npos = np.clip(current_ee_pos + action * 0.1, self.bounds["min"], self.bounds["max"])
         self.env.data.mocap_pos[0] = npos
 
         # TODO (lilkm): No gripper, add gripper continuous
@@ -1092,6 +1094,43 @@ class GamepadControlWrapper(gym.Wrapper):
 
         # Call the parent close method
         return self.env.close()
+    
+class SimRewardWrapper(gym.Wrapper):
+    """
+    This wrapper is used to help label transitions via the sim env.
+    """
+
+    def __init__(self, env, reward_type):
+        super().__init__(env)
+        self.reward_type = reward_type
+
+    def compute_reward(self) -> float:
+        if self.reward_type == "dense":
+            block_pos = self.env.data.sensor("block_pos").data
+            target_pos = self.env.model.geom("target_region").pos
+            dist = np.linalg.norm(block_pos - target_pos)
+            reward = np.exp(-20 * dist)
+            return reward
+        else:
+            block_pos = self.env.data.sensor("block_pos").data
+            target_pos = self.env.model.geom("target_region").pos
+            dist = np.linalg.norm(block_pos[:2] - target_pos[:2])
+            return float(dist < 0.02)
+
+    def is_success(self) -> bool:
+        block_pos = self.env.data.sensor("block_pos").data
+        target_pos = self.env.model.geom("target_region").pos
+        dist = np.linalg.norm(block_pos[:2] - target_pos[:2])
+        return dist < 0.02
+    
+    def step(self, action):
+        observation, reward, terminated, truncated, info = self.env.step(action)
+
+        reward = self.compute_reward()
+
+        if reward == 1.0:
+            terminated = True
+        return observation, reward, terminated, truncated, info
 
 
 def make_robot_env(
@@ -1122,7 +1161,7 @@ def make_robot_env(
         )
         return env
     # Create base environment
-    env = PandaPickCubeGymEnv(
+    env = PandaPushCubeGymEnv(
         cfg=cfg,
         delta=cfg.env.wrapper.delta_action,
         use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions,
@@ -1153,6 +1192,8 @@ def make_robot_env(
     # Add reward computation and control wrappers
     if reward_classifier is not None:
         env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
+    else:
+        env = SimRewardWrapper(env=env, reward_type="sparse")
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
@@ -1228,9 +1269,7 @@ def record_dataset(
     features = {
         "observation.state": {
             "dtype": "float32",
-            "shape": env.observation_space["observation.state"][
-                "observation.state"
-            ].shape,
+            "shape": env.observation_space["observation.state"]["qpos"].shape,
             "names": None,
         },
         "action": {
@@ -1265,37 +1304,47 @@ def record_dataset(
         image_writer_processes=0,
         features=features,
     )
-    episode_index = 0
-    while episode_index < num_episodes:
-        env.reset()
-        start_episode_t = time.perf_counter()
-        log_say(f"Recording episode {episode_index}", play_sounds=True)
+    
+    # Create the dual viewer
+    dual_viewer = DualMujocoViewer(env.model, env.data)
 
-        while time.perf_counter() - start_episode_t < control_time_s:
-            start_loop_t = time.perf_counter()
-            obs, reward, terminated, truncated, info = env.step(dummy_action)
+    with dual_viewer as viewer:
+        episode_index = 0
+        while viewer.is_running():
+            env.reset()
+            start_episode_t = time.perf_counter()
+            log_say(f"Recording episode {episode_index}", play_sounds=True)
+
+            while time.perf_counter() - start_episode_t < control_time_s:
+                start_loop_t = time.perf_counter()
+                obs, reward, terminated, truncated, info = env.step(dummy_action)
+                viewer.sync()
+                if info["rerecord_episode"]:
+                    break
+                action = {"action": info["action_intervention"].cpu().squeeze(0).float()}
+                obs = {k: v.cpu().squeeze(0).float() for k, v in obs.items()}
+
+                frame = {**obs, **action}
+                frame["next.reward"] = reward
+                frame["next.done"] = terminated or truncated
+                dataset.add_frame(frame)
+                if fps is not None:
+                    dt_s = time.perf_counter() - start_loop_t
+                    busy_wait(1 / fps - dt_s)
+
+                if terminated or truncated:
+                    break
+
             if info["rerecord_episode"]:
-                break
-            action = {"action": info["action_intervention"].cpu().squeeze(0).float()}
-            obs = {k: v.cpu().squeeze(0).float() for k, v in obs.items()}
+                dataset.clear_episode_buffer()
+                logging.info(f"Re-recording episode {episode_index}")
+                continue
 
-            frame = {**obs, **action}
-            frame["next.reward"] = reward
-            frame["next.done"] = terminated or truncated
-            dataset.add_frame(frame)
-            if fps is not None:
-                dt_s = time.perf_counter() - start_loop_t
-                busy_wait(1 / fps - dt_s)
-
-            if terminated or truncated:
+            if episode_index >= num_episodes:
                 break
 
-        if info["rerecord_episode"]:
-            dataset.clear_episode_buffer()
-            logging.info(f"Re-recording episode {episode_index}")
-            continue
-        dataset.save_episode(task_description)
-        episode_index += 1
+            dataset.save_episode(task_description)
+            episode_index += 1
     dataset.consolidate(run_compute_stats=True)
 
     if push_to_hub:
@@ -1435,9 +1484,9 @@ if __name__ == "__main__":
 
     cfg = init_hydra_config(args.env_path, args.env_overrides)
     env = make_robot_env(
-        robot,
-        reward_classifier,
-        cfg,  # .wrapper,
+        robot=None,
+        reward_classifier=None,
+        cfg=cfg,  # .wrapper,
     )
 
     if args.record_repo_id is not None:

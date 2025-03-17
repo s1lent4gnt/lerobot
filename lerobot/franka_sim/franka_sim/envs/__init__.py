@@ -1,5 +1,5 @@
-from franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv
+from franka_sim.envs.panda_push_gym_env import PandaPushCubeGymEnv
 
 __all__ = [
-    "PandaPickCubeGymEnv",
+    "PandaPushCubeGymEnv",
 ]

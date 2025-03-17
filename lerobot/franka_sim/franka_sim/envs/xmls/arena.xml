@@ -30,6 +30,8 @@
     <body name="target" pos=".15 0 .5" quat="0 1 0 0" mocap="true">
       <geom name="target" type="box" size=".03 .03 .03" contype="0" conaffinity="0" rgba=".6 .3 .3 0"/>
     </body>
+
+    <geom name="target_region" type="cylinder" pos=".5 .10 0.005" size="0.035 0.01" rgba="0 0 1 0.3"  contype="0" conaffinity="0" />
   </worldbody>
 
   <sensor>
