@@ -398,8 +398,6 @@ def act_with_policy(
                         f"[ACTOR] NaN values found in obs[{key}] at step {interaction_step}"
                     )
 
-            print(f"REWARD = {reward}")
-
             list_transition_to_send_to_learner.append(
                 Transition(
                     state=obs,
