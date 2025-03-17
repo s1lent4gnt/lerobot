@@ -1,0 +1,55 @@
+# @package _global_
+
+fps: 10
+
+robot:
+  max_relative_target: null
+  joint_position_relative_bounds: null
+
+env:
+  name: panda_sim
+  task: null
+  state_dim: 17
+  action_dim: 3
+  fps: ${fps}
+  device: cuda
+
+  reward_classifier:
+    pretrained_path: null
+    config_path: null
+
+  gym:
+    render_mode: rgb_array
+    max_episode_steps: 200
+    actions_in_degrees: true
+    reward_type: 'sparse'
+
+  wrapper:
+    delta_action: 0.1
+    use_delta_action_space: false
+    use_relative_joint_positions: false
+    joint_masking_action_space: null # [1, 1, 1, 1, 1, 1, 1]  # Use all 7 joints of the Panda robot
+    add_joint_velocity_to_observation: true
+    add_ee_pose_to_observation: true
+    control_time_s: 20.0
+    reset_time_s: 5.0
+    fixed_reset_joint_positions: [0, -0.785, 0, -2.35, 0, 1.57, 0.7853975]
+    crop_params_dict:
+      observation.images.front: [0, 0, 128, 128]
+      observation.images.wrist: [0, 0, 128, 128]
+    resize_size: [128, 128]
+    ee_action_space_params:
+      x_step_size: 0.03
+      y_step_size: 0.03
+      z_step_size: 0.05
+      use_gamepad: true
+      bounds:
+        min: [0.2, -0.3, 0.0]
+        max: [0.6, 0.3, 0.5]
+
+calibration:
+  axis_directions: [-1, -1, 1, -1, -1, -1]
+  offsets: [0, -0.5, -0.5, 0, -0.5, 0] # factor of pi
+
+eval:
+  use_async_envs: false
