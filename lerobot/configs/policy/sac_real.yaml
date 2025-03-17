@@ -8,11 +8,13 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id:  aractingi/insertcube_simple
+dataset_repo_id: lilkm/test-dataset
 
 training:
   # Offline training dataloader
   num_workers: 4
+
+  storage_device: "cpu"
 
   # batch_size: 256
   batch_size: 512
@@ -58,7 +60,7 @@ policy:
     # # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
     observation.state: ["${env.state_dim}"]
     observation.images.front: [3, 128, 128]
-    observation.images.side: [3, 128, 128]
+    observation.images.wrist: [3, 128, 128]
     # observation.image: [3, 128, 128]
   output_shapes:
     action: ["${env.action_dim}"]
@@ -66,19 +68,19 @@ policy:
   # Normalization / Unnormalization
   input_normalization_modes:
     observation.images.front: mean_std
-    observation.images.side: mean_std
+    observation.images.wrist: mean_std
     observation.state: min_max
   input_normalization_params:
     observation.images.front:
       mean: [0.485, 0.456, 0.406]
       std: [0.229, 0.224, 0.225]
-    observation.images.side:
+    observation.images.wrist:
       mean: [0.485, 0.456, 0.406]
       std: [0.229, 0.224, 0.225]
     observation.state:
       # 6- joint positions, 6- joint velocities, 3- ee position
-      max: [ 52.822266,  136.14258,   142.03125,   72.1582,     22.675781,   -0.5673759, 100., 100., 100., 100., 100., 100., 0.25295413, 0.07498981, 0.06862044]
-      min: [-2.6367188,  86.572266,   89.82422,    12.392578,    -26.015625,   -0.5673759, -100., -100., -100., -100., -100., -100., 0.2010096,  -0.12, 0.0433196]
+      max: [ 52.822266,  136.14258,   142.03125,   72.1582,     22.675781,   -0.5673759, 1., 100., 100., 100., 100., 100., 100., 100., 0.25295413, 0.07498981, 0.06862044]
+      min: [-2.6367188,  86.572266,   89.82422,    12.392578,    -26.015625,   -0.5673759, -1.,  -100., -100., -100., -100., -100., -100., -100., 0.2010096,  -0.12, 0.0433196]
 
   output_normalization_modes:
     action: min_max
@@ -107,6 +109,10 @@ actor_learner_config:
   learner_host: "127.0.0.1"
   learner_port: 50051
   policy_parameters_push_frequency: 15
+
+  concurrency:
+    actor: "threads"
+    learner: "threads"
 
   # # Loss coefficients.
   # reward_coeff: 0.5

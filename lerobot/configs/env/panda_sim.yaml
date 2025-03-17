@@ -31,7 +31,7 @@ env:
     joint_masking_action_space: null # [1, 1, 1, 1, 1, 1, 1]  # Use all 7 joints of the Panda robot
     add_joint_velocity_to_observation: true
     add_ee_pose_to_observation: true
-    control_time_s: 20.0
+    control_time_s: 60.0
     reset_time_s: 5.0
     fixed_reset_joint_positions: [0, -0.785, 0, -2.35, 0, 1.57, 0.7853975]
     crop_params_dict:
