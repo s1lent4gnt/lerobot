@@ -33,7 +33,7 @@ env:
     add_ee_pose_to_observation: true
     control_time_s: 60.0
     reset_time_s: 5.0
-    fixed_reset_joint_positions: [0, -0.785, 0, -2.35, 0, 1.57, 0.7853975]
+    fixed_reset_joint_positions: [-0.18, 0.32, -0.0436, -2.35, 0.0301, 2.67, 0.537]
     crop_params_dict:
       observation.images.front: [0, 0, 128, 128]
       observation.images.wrist: [0, 0, 128, 128]

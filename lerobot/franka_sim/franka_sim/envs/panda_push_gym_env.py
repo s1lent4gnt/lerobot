@@ -83,7 +83,7 @@ class PandaPushCubeGymEnv(MujocoGymEnv):
             [self._model.actuator(f"actuator{i}").id for i in range(1, 8)]
         )
 
-        self._gripper_ctrl_id = self._model.actuator("fingers_actuator").id
+        self.gripper_ctrl_id = self._model.actuator("fingers_actuator").id
         self._pinch_site_id = self._model.site("pinch").id
         self._block_z = self._model.geom("block").size[2]
 
@@ -186,33 +186,34 @@ class PandaPushCubeGymEnv(MujocoGymEnv):
         self, seed=None, **kwargs
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         """Reset the environment."""
-        mujoco.mj_resetData(self._model, self._data)
+        # mujoco.mj_resetData(self._model, self._data)
 
-        # Reset arm to home position.
-        self._data.qpos[self.panda_dof_ids] = _PANDA_HOME
-        # Gripper
-        self._data.ctrl[self._gripper_ctrl_id] = 255
-        mujoco.mj_forward(self._model, self._data)
+        # # Reset arm to home position.
+        # # self._data.qpos[self.panda_dof_ids] = _PANDA_HOME
+        # self._data.qpos[self.panda_dof_ids] = np.asarray(self.cfg.env.wrapper.fixed_reset_joint_positions)
+        # # Gripper
+        # self._data.ctrl[self._gripper_ctrl_id] = 255
+        # mujoco.mj_forward(self._model, self._data)
 
-        # Reset mocap body to home position.
-        tcp_pos = self._data.sensor("2f85/pinch_pos").data
-        self._data.mocap_pos[0] = tcp_pos
+        # # Reset mocap body to home position.
+        # tcp_pos = self._data.sensor("2f85/pinch_pos").data
+        # self._data.mocap_pos[0] = tcp_pos
 
-        # Sample a new block position.
-        # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-        block_xy = np.array([0.5, 0.0])
-        self._data.jnt("block").qpos[:3] = (*block_xy, self._block_z)
-        mujoco.mj_forward(self._model, self._data)
+        # # Sample a new block position.
+        # # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+        # block_xy = np.array([0.5, 0.0])
+        # self._data.jnt("block").qpos[:3] = (*block_xy, self._block_z)
+        # mujoco.mj_forward(self._model, self._data)
 
-        # Cache the initial block height.
-        self._z_init = self._data.sensor("block_pos").data[2]
-        self._z_success = self._z_init + 0.2
+        # # Cache the initial block height.
+        # self._z_init = self._data.sensor("block_pos").data[2]
+        # self._z_success = self._z_init + 0.2
 
-        # Sample a new target position
-        # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-        target_region_xy = np.array([0.5, 0.10])
-        self._model.geom("target_region").pos = (*target_region_xy, 0.005)
-        mujoco.mj_forward(self._model, self._data)
+        # # Sample a new target position
+        # # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+        # target_region_xy = np.array([0.5, 0.10])
+        # self._model.geom("target_region").pos = (*target_region_xy, 0.005)
+        # mujoco.mj_forward(self._model, self._data)
 
         # Reset episode tracking variables.
         self.current_step = 0

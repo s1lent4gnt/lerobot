@@ -791,8 +791,30 @@ class ResetWrapper(gym.Wrapper):
         if self.reset_pose is not None:
             start_time = time.perf_counter()
             log_say("Reset the environment.", play_sounds=True)
-            self.env.data.qpos[self.env.panda_dof_ids] = self.reset_pose
+            mujoco.mj_resetData(self.env.model, self.env.data)
+
+            # Reset arm to home position.
+            self.env.data.qpos[self.env.panda_dof_ids] = np.asarray(self.reset_pose)
+            # Gripper
+            self.env.data.ctrl[self.env.gripper_ctrl_id] = 255
             mujoco.mj_forward(self.env.model, self.env.data)
+
+            # Reset mocap body to home position.
+            tcp_pos = self.env.data.sensor("2f85/pinch_pos").data
+            self.env.data.mocap_pos[0] = tcp_pos
+
+            # Sample a new block position.
+            # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+            block_xy = np.array([0.5, 0.0])
+            self.env.data.jnt("block").qpos[:3] = (*block_xy, 0.02)
+            mujoco.mj_forward(self.env.model, self.env.data)
+
+            # Sample a new target position
+            # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+            target_region_xy = np.array([0.5, 0.10])
+            self.env.model.geom("target_region").pos = (*target_region_xy, 0.005)
+            mujoco.mj_forward(self.env.model, self.env.data)
+
             busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
             log_say("Reset the environment done.", play_sounds=True)
         else:
