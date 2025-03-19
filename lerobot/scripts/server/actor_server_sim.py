@@ -52,7 +52,7 @@ from lerobot.scripts.server.network_utils import (
     receive_bytes_in_chunks,
     send_bytes_in_chunks,
 )
-from lerobot.scripts.server.gym_manipulator import get_classifier, make_robot_env
+from lerobot.scripts.server.mujoco_manipulator import get_classifier, make_robot_env
 from lerobot.scripts.server import learner_service
 from lerobot.common.robot_devices.utils import busy_wait
 
