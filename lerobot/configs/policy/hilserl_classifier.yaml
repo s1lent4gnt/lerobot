@@ -12,7 +12,7 @@ hydra:
     name: default
 
 seed: 13
-dataset_repo_id: lilkm/franka_push_cube
+dataset_repo_id: lilkm/panda_push_cube
 # aractingi/push_cube_square_reward_1_cropped_resized
 # dataset_root: data/aractingi/push_cube_square_light_reward_cropped_resized
 dataset_root: null
