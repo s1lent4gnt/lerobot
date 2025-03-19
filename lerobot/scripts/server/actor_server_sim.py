@@ -368,10 +368,7 @@ def act_with_policy(
                 )
             else:
                 # TODO (azouitine): Make a custom space for torch tensor
-                # action = online_env.action_space.sample()
-                # TODO (lilkm): why sampling "is_intervention"
-                action_robot = online_env.action_space[0].sample()  # Only sample robot action
-                action = (action_robot, False)  # Always set intervention to False
+                action = online_env.action_space.sample()
                 next_obs, reward, done, truncated, info = online_env.step(action)
 
                 # HACK: We have only one env but we want to batch it, it will be resolved with the torch box
