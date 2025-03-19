@@ -302,6 +302,7 @@ def record(
             start_episode_t = time.perf_counter()
 
             seed = np.random.randint(0, 1e5)
+            events["next.reward"] = 0
             observation, info = env.reset(seed=seed)
 
             while timestamp < episode_time_s:
@@ -331,8 +332,8 @@ def record(
 
                 # Overwrite environment reward with manually assigned reward
                 if assign_rewards:
-                    # frame["next.reward"] = events["next.reward"]
-                    frame["next.reward"] = reward
+                    frame["next.reward"] = events["next.reward"]
+                    # frame["next.reward"] = reward
 
                     # Should success always be false to match what we do in control_utils?
                     frame["next.success"] = False
@@ -383,7 +384,7 @@ def record(
                 busy_wait(3)
 
     log_say("Stop recording", play_sounds, blocking=True)
-    # stop_recording(robot, listener, display_cameras)
+    stop_recording(robot, listener, display_cameras)
 
     if run_compute_stats:
         logging.info("Computing dataset statistics")
