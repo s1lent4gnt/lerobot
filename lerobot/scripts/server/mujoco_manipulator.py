@@ -1211,9 +1211,9 @@ def make_robot_env(
 
     # Add reward computation and control wrappers
     if reward_classifier is not None:
-        env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
-    else:
-        env = SimRewardWrapper(env=env, reward_type="sparse")
+        env = RewardWrapper(env=env, reward_classifier=reward_classifier, device="cuda")
+    # else:
+    #     env = SimRewardWrapper(env=env, reward_type="sparse")
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
@@ -1361,7 +1361,7 @@ def record_dataset(
                 obs = {k: v.cpu().squeeze(0).float() for k, v in obs.items()}
 
                 frame = {**obs, **action}
-                frame["next.reward"] = reward
+                frame["next.reward"] = reward.cpu().squeeze(0).float()
                 frame["next.done"] = terminated or truncated
                 dataset.add_frame(frame)
                 if fps is not None:
@@ -1513,7 +1513,7 @@ if __name__ == "__main__":
     cfg = init_hydra_config(args.env_path, args.env_overrides)
     env = make_robot_env(
         robot=None,
-        reward_classifier=None,
+        reward_classifier=reward_classifier,
         cfg=cfg,  # .wrapper,
     )
 
