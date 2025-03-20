@@ -23,7 +23,7 @@ training:
 
   eval_freq: 2500
   log_freq: 1
-  save_freq: 1000
+  save_freq: 500
 
   online_steps: 1000000
   offline_buffer_capacity: 100000
@@ -95,7 +95,7 @@ policy:
   image_encoder_hidden_dim: 32
   # discount: 0.99
   discount: 0.97
-  temperature_init: 1.0
+  temperature_init: 1e-2
   num_critics: 2 #10
   camera_number: 2
   num_subsample_critics: null

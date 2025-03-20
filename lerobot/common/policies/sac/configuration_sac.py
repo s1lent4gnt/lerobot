@@ -83,7 +83,7 @@ class SACConfig:
     state_encoder_hidden_dim: int = 256
     latent_dim: int = 256
     target_entropy: float | None = None
-    use_backup_entropy: bool = True
+    use_backup_entropy: bool = False
     grad_clip_norm: float = 40.0
     critic_network_kwargs: dict[str, Any] = field(
         default_factory=lambda: {
@@ -101,7 +101,7 @@ class SACConfig:
     policy_kwargs: dict[str, Any] = field(
         default_factory=lambda: {
             "use_tanh_squash": True,
-            "log_std_min": -5,
+            "log_std_min": 1e-5,
             "log_std_max": 2,
             "init_final": 0.05,
         }
