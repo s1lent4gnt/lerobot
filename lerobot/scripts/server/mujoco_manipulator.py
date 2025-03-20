@@ -891,7 +891,7 @@ class EEActionWrapper(gym.ActionWrapper):
 
         # TODO (lilkm): No gripper, add gripper continuous
 
-        for _ in range(9):
+        for _ in range(49):
             target_joint_pos = opspace(
                 model=self.env.model,
                 data=self.env.data,
@@ -1188,7 +1188,7 @@ def make_robot_env(
         render_mode="human",
         image_obs=True,
         reward_type="sparse",
-        time_limit=100.0,
+        time_limit=60.0,
         control_dt=0.1
     )
 
@@ -1347,31 +1347,44 @@ def record_dataset(
     with dual_viewer as viewer:
         episode_index = 0
         while viewer.is_running():
-            env.reset()
+            obs, _ = env.reset()
             start_episode_t = time.perf_counter()
             log_say(f"Recording episode {episode_index}", play_sounds=True)
 
+            # Run episode steps
             while time.perf_counter() - start_episode_t < control_time_s:
                 start_loop_t = time.perf_counter()
+                # Get action from policy if available
+                if policy is not None:
+                    action = policy.select_action(obs)
+                # Step environment
                 obs, reward, terminated, truncated, info = env.step(dummy_action)
                 viewer.sync()
-                if info["rerecord_episode"]:
+                if info.get("rerecord_episode", False):
                     break
-                action = {"action": info["action_intervention"].cpu().squeeze(0).float()}
+                # For teleop, get action from intervention
+                if policy is None:
+                    action = {
+                        "action": info["action_intervention"].cpu().squeeze(0).float()
+                    }
+                # Process observation for dataset
                 obs = {k: v.cpu().squeeze(0).float() for k, v in obs.items()}
 
+                # Add frame to dataset
                 frame = {**obs, **action}
                 frame["next.reward"] = reward.cpu().squeeze(0).float()
                 frame["next.done"] = terminated or truncated
                 dataset.add_frame(frame)
-                if fps is not None:
+                # Maintain consistent timing
+                if fps:
                     dt_s = time.perf_counter() - start_loop_t
                     busy_wait(1 / fps - dt_s)
 
                 if terminated or truncated:
                     break
 
-            if info["rerecord_episode"]:
+            # Handle episode recording
+            if info.get("rerecord_episode", False):
                 dataset.clear_episode_buffer()
                 logging.info(f"Re-recording episode {episode_index}")
                 continue
