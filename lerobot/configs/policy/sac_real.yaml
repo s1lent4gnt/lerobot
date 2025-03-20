@@ -23,7 +23,7 @@ training:
 
   eval_freq: 2500
   log_freq: 1
-  save_freq: 2000000
+  save_freq: 1000
 
   online_steps: 1000000
   offline_buffer_capacity: 100000
