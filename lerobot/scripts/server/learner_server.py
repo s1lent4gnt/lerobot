@@ -605,6 +605,8 @@ def add_actor_information_and_train(
 
             optimizers["critic"].step()
 
+            policy.update_target_networks()
+
         batch = replay_buffer.sample(batch_size)
 
         if dataset_repo_id is not None:
@@ -649,50 +651,52 @@ def add_actor_information_and_train(
         training_infos["loss_critic"] = loss_critic.item()
         training_infos["critic_grad_norm"] = critic_grad_norm
 
-        if optimization_step % policy_update_freq == 0:
-            for _ in range(policy_update_freq):
-                loss_actor = policy.compute_loss_actor(
-                    observations=observations,
-                    observation_features=observation_features,
-                )
+        # if optimization_step % policy_update_freq == 0:
+            # for _ in range(policy_update_freq):
+        loss_actor = policy.compute_loss_actor(
+            observations=observations,
+            observation_features=observation_features,
+        )
 
-                optimizers["actor"].zero_grad()
-                loss_actor.backward()
+        optimizers["actor"].zero_grad()
+        loss_actor.backward()
 
-                # clip gradients
-                actor_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    policy.actor.parameters_to_optimize, clip_grad_norm_value
-                ).item()
+        # clip gradients
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+            policy.actor.parameters_to_optimize, clip_grad_norm_value
+        ).item()
 
-                optimizers["actor"].step()
+        optimizers["actor"].step()
 
-                training_infos["loss_actor"] = loss_actor.item()
-                training_infos["actor_grad_norm"] = actor_grad_norm
+        training_infos["loss_actor"] = loss_actor.item()
+        training_infos["actor_grad_norm"] = actor_grad_norm
 
-                # Temperature optimization
-                loss_temperature = policy.compute_loss_temperature(
-                    observations=observations,
-                    observation_features=observation_features,
-                )
-                optimizers["temperature"].zero_grad()
-                loss_temperature.backward()
+        # Temperature optimization
+        loss_temperature = policy.compute_loss_temperature(
+            observations=observations,
+            observation_features=observation_features,
+        )
+        optimizers["temperature"].zero_grad()
+        loss_temperature.backward()
 
-                #  clip gradients
-                temp_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    [policy.log_alpha], clip_grad_norm_value
-                ).item()
+        #  clip gradients
+        temp_grad_norm = torch.nn.utils.clip_grad_norm_(
+            [policy.log_alpha], clip_grad_norm_value
+        ).item()
 
-                optimizers["temperature"].step()
+        optimizers["temperature"].step()
 
-                training_infos["loss_temperature"] = loss_temperature.item()
-                training_infos["temperature_grad_norm"] = temp_grad_norm
-                training_infos["temperature"] = policy.temperature
+        training_infos["loss_temperature"] = loss_temperature.item()
+        training_infos["temperature_grad_norm"] = temp_grad_norm
+        training_infos["temperature"] = policy.temperature
+
+        policy.update_target_networks()
 
         if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
             push_actor_policy_to_queue(parameters_queue, policy)
             last_time_policy_pushed = time.time()
 
-        policy.update_target_networks()
+        # policy.update_target_networks()
 
         if optimization_step % log_freq == 0:
             training_infos["replay_buffer_size"] = len(replay_buffer)
