@@ -24,6 +24,7 @@ from lerobot.scripts.server.kinematics import RobotKinematics
 logging.basicConfig(level=logging.INFO)
 
 from lerobot.franka_sim.franka_sim.envs.panda_push_gym_env import PandaPushCubeGymEnv, _PANDA_HOME
+from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv, _PANDA_HOME
 from lerobot.franka_sim.franka_sim.controllers import opspace
 import mujoco
 from lerobot.franka_sim.franka_sim.utils.viewer_utils import DualMujocoViewer
@@ -336,16 +337,20 @@ class AddJointVelocityToObservation(gym.ObservationWrapper):
         old_high = self.observation_space["observation.state"].high
         old_shape = self.observation_space["observation.state"].shape
 
-        self.last_joint_positions = np.zeros(old_shape)
+        # Assuming the last element is the gripper
+        self.arm_joint_count = old_shape[0] - 1  # Number of arm joints (excluding gripper)
+
+        self.last_joint_positions = np.zeros(self.arm_joint_count)
 
         new_low = np.concatenate(
-            [old_low, np.ones_like(old_low) * -joint_velocity_limits]
+            [old_low, np.ones(self.arm_joint_count) * -joint_velocity_limits]
         )
         new_high = np.concatenate(
-            [old_high, np.ones_like(old_high) * joint_velocity_limits]
+            [old_high, np.ones(self.arm_joint_count) * joint_velocity_limits]
         )
 
-        new_shape = (old_shape[0] * 2,)
+        # New shape: original observation plus velocities for arm joints only
+        new_shape = (old_shape[0] + self.arm_joint_count,)
 
         self.observation_space["observation.state"] = gym.spaces.Box(
             low=new_low,
@@ -357,12 +362,16 @@ class AddJointVelocityToObservation(gym.ObservationWrapper):
         self.dt = 1.0 / fps
 
     def observation(self, observation):
+        # Extract arm joint positions (exclude gripper)
+        arm_joint_positions = observation["observation.state"][:-1]
+        gripper_position = observation["observation.state"][-1].unsqueeze(0)
+        
         joint_velocities = (
-            observation["observation.state"] - self.last_joint_positions
+            arm_joint_positions - self.last_joint_positions
         ) / self.dt
-        self.last_joint_positions = observation["observation.state"].clone()
+        self.last_joint_positions = arm_joint_positions.clone()
         observation["observation.state"] = torch.cat(
-            [observation["observation.state"], joint_velocities], dim=-1
+            [arm_joint_positions, gripper_position, joint_velocities], dim=-1
         )
         return observation
 
@@ -803,6 +812,10 @@ class ResetWrapper(gym.Wrapper):
             tcp_pos = self.env.data.sensor("2f85/pinch_pos").data
             self.env.data.mocap_pos[0] = tcp_pos
 
+            # z pos
+            self.z_init = self.data.sensor("block_pos").data[2]
+            self.z_success = self.z_init + 0.2
+
             # Sample a new block position.
             # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
             block_xy = np.array([0.5, 0.0])
@@ -861,18 +874,36 @@ class EEActionWrapper(gym.ActionWrapper):
                 ee_action_space_params.z_step_size,
             ]
         )
-        ee_action_space = gym.spaces.Box(
-            low=-action_space_bounds,
-            high=action_space_bounds,
-            shape=(3,),
+        # ee_action_space = gym.spaces.Box(
+        #     low=-action_space_bounds,
+        #     high=action_space_bounds,
+        #     shape=(3,),
+        #     dtype=np.float32,
+        # )
+
+        # # Gripper action space: -1 (open), 0 (no change), 1 (close)
+        # gripper_action_space = gym.spaces.Box(
+        #     low=-1.0,
+        #     high=1.0,
+        #     shape=(1,),
+        #     dtype=np.float32,
+        # )
+
+        # Combined action space including gripper
+        full_action_space = gym.spaces.Box(
+            low=np.concatenate([-action_space_bounds, np.array([-1.0])]),
+            high=np.concatenate([action_space_bounds, np.array([1.0])]),
+            shape=(4,),
             dtype=np.float32,
         )
+
+        # Set the action space based on environment configuration
         if isinstance(self.action_space, gym.spaces.Tuple):
             self.action_space = gym.spaces.Tuple(
-                (ee_action_space, self.action_space[1])
+                (full_action_space, self.action_space[1])
             )
         else:
-            self.action_space = ee_action_space
+            self.action_space = full_action_space
 
         self.bounds = ee_action_space_params.bounds
 
@@ -884,12 +915,35 @@ class EEActionWrapper(gym.ActionWrapper):
         if isinstance(action, torch.Tensor):
             action = action.cpu().numpy()
 
+        # Extract position and gripper actions
+        position_action = action[:3]
+        gripper_action = action[3] if len(action) > 3 else 0.0
+
         # Set the mocap position.
         current_ee_pos = self.env.data.mocap_pos[0].copy()
-        npos = np.clip(current_ee_pos + action * 0.1, self.bounds["min"], self.bounds["max"])
+        npos = np.clip(current_ee_pos + position_action * 0.1, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
         self.env.data.mocap_pos[0] = npos
 
-        # TODO (lilkm): No gripper, add gripper continuous
+        # Get current gripper state (normalized to 0-1)
+        current_gripper = self.env.data.ctrl[self.env.gripper_ctrl_id] / 255.0
+        
+        # Calculate gripper delta based on action and scale
+        # gripper_delta = gripper_action * 0.1 # TODO (lilkm): 0.1 is the step size, should be a parameter
+
+        if gripper_action > 0:  # Close gripper
+            # Use random values between 0.9-1.0 for closing, like the reference
+            new_gripper = 1.0
+        elif gripper_action < 0:  # Open gripper
+            # Use random values between 0-0.1 for opening
+            new_gripper = 0.0
+        else:
+            new_gripper = current_gripper
+        
+        # Compute new gripper position and clip to valid range
+        # new_gripper = np.clip(current_gripper + gripper_delta, 0.0, 1.0)
+        
+        # Apply to environment (scaling back to 0-255 range)
+        # self.env.data.ctrl[self.env.gripper_ctrl_id] = new_gripper * 255.0
 
         for _ in range(49):
             target_joint_pos = opspace(
@@ -915,7 +969,10 @@ class EEActionWrapper(gym.ActionWrapper):
             joint=_PANDA_HOME,
             gravity_comp=True,
         )
-        return target_joint_pos, is_intervention
+
+        output = np.concatenate([target_joint_pos, [new_gripper * 255.0]])
+
+        return output, is_intervention
 
 
 class EEObservationWrapper(gym.ObservationWrapper):
@@ -1001,6 +1058,8 @@ class GamepadControlWrapper(gym.Wrapper):
         print("Gamepad controls:")
         print("  Left analog stick: Move in X-Y plane")
         print("  Right analog stick: Move in Z axis (up/down)")
+        print("  L3 button (press left stick): Open gripper")
+        print("  R3 button (press right stick): Close gripper")
         print("  X/Square button: End episode (FAILURE)")
         print("  Y/Triangle button: End episode (SUCCESS)")
         print("  B/Circle button: Exit program")
@@ -1018,10 +1077,13 @@ class GamepadControlWrapper(gym.Wrapper):
         # Get movement deltas from the controller
         delta_x, delta_y, delta_z = self.controller.get_deltas()
 
+        # Get gripper action
+        gripper_action = self.controller.get_gripper_action()
+
         intervention_is_active = self.controller.should_intervene()
 
         # Create action from gamepad input
-        gamepad_action = np.array([delta_x, delta_y, delta_z], dtype=np.float32)
+        gamepad_action = np.array([delta_x, delta_y, delta_z, gripper_action], dtype=np.float32)
 
         # Check episode ending buttons
         # We'll rely on controller.get_episode_end_status() which returns "success", "failure", or None
@@ -1126,30 +1188,57 @@ class SimRewardWrapper(gym.Wrapper):
 
     def compute_reward(self) -> float:
         if self.reward_type == "dense":
-            block_pos = self.env.data.sensor("block_pos").data
-            target_pos = self.env.model.geom("target_region").pos
-            dist = np.linalg.norm(block_pos - target_pos)
-            reward = np.exp(-20 * dist)
-            return reward
+            block_pos = self.data.sensor("block_pos").data
+            tcp_pos = self.data.sensor("2f85/pinch_pos").data
+            dist = np.linalg.norm(block_pos - tcp_pos)
+            r_close = np.exp(-20 * dist)
+            r_lift = (block_pos[2] - self.z_init) / (self._z_success - self.z_init)
+            r_lift = np.clip(r_lift, 0.0, 1.0)
+            rew = 0.3 * r_close + 0.7 * r_lift
+            return rew
         else:
-            block_pos = self.env.data.sensor("block_pos").data
-            target_pos = self.env.model.geom("target_region").pos
-            dist = np.linalg.norm(block_pos[:2] - target_pos[:2])
-            return float(dist < 0.02)
+            block_pos = self.data.sensor("block_pos").data
+            lift = block_pos[2] - self.z_init
+            return float(lift > 0.2)
 
     def is_success(self) -> bool:
-        block_pos = self.env.data.sensor("block_pos").data
-        target_pos = self.env.model.geom("target_region").pos
-        dist = np.linalg.norm(block_pos[:2] - target_pos[:2])
-        return dist < 0.02
+        block_pos = self.data.sensor("block_pos").data
+        tcp_pos = self.data.sensor("2f85/pinch_pos").data
+        dist = np.linalg.norm(block_pos - tcp_pos)
+        lift = block_pos[2] - self.z_init
+        return dist < 0.05 and lift > 0.2
     
     def step(self, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
 
         reward = self.compute_reward()
 
+        # move reward to device
+        reward = torch.tensor(reward, device=self.device)
         if reward == 1.0:
             terminated = True
+        return observation, reward, terminated, truncated, info
+
+class GripperPenaltyWrapper(gym.Wrapper):
+    def __init__(self, env, penalty=-0.05):
+        super().__init__(env)
+        self.penalty = penalty
+        self.last_gripper_pos = None
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.last_gripper_pos = obs["observation.state"][0, 7] # TODO (lilkm) : gripper joint in the first index
+        return obs, info
+
+    def step(self, action):
+        observation, reward, terminated, truncated, info = self.env.step(action)
+
+        if (action[-1] < -0.5 and self.last_gripper_pos > 0.9) or (action[-1] > 0.5 and self.last_gripper_pos < 0.9):
+            info["grasp_penalty"] = self.penalty
+        else:
+            info["grasp_penalty"] = 0.0
+
+        self.last_gripper_pos = observation["observation.state"][0, 7]
         return observation, reward, terminated, truncated, info
 
 
@@ -1181,7 +1270,18 @@ def make_robot_env(
         )
         return env
     # Create base environment
-    env = PandaPushCubeGymEnv(
+    # env = PandaPushCubeGymEnv(
+    #     cfg=cfg,
+    #     delta=cfg.env.wrapper.delta_action,
+    #     use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions,
+    #     render_mode="human",
+    #     image_obs=True,
+    #     reward_type="sparse",
+    #     time_limit=60.0,
+    #     control_dt=0.1
+    # )
+
+    env = PandaPickCubeGymEnv(
         cfg=cfg,
         delta=cfg.env.wrapper.delta_action,
         use_delta_action_space=cfg.env.wrapper.use_relative_joint_positions,
@@ -1212,8 +1312,8 @@ def make_robot_env(
     # Add reward computation and control wrappers
     if reward_classifier is not None:
         env = RewardWrapper(env=env, reward_classifier=reward_classifier, device="cuda")
-    # else:
-    #     env = SimRewardWrapper(env=env, reward_type="sparse")
+    else:
+        env = SimRewardWrapper(env=env, reward_type="sparse")
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
@@ -1244,6 +1344,8 @@ def make_robot_env(
             env=env, mask=cfg.env.wrapper.joint_masking_action_space
         )
     env = BatchCompitableWrapper(env=env)
+
+    env = GripperPenaltyWrapper(env=env)
 
     return env
 
@@ -1524,9 +1626,15 @@ if __name__ == "__main__":
     user_relative_joint_positions = True
 
     cfg = init_hydra_config(args.env_path, args.env_overrides)
+    # env = make_robot_env(
+    #     robot=None,
+    #     reward_classifier=reward_classifier,
+    #     cfg=cfg,  # .wrapper,
+    # )
+
     env = make_robot_env(
         robot=None,
-        reward_classifier=reward_classifier,
+        reward_classifier=None,
         cfg=cfg,  # .wrapper,
     )
 
