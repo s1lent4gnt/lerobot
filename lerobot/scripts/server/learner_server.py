@@ -606,6 +606,27 @@ def add_actor_information_and_train(
             optimizers["critic"].step()
 
             policy.update_target_networks()
+            
+            # Add gripper critic optimization
+            loss_grasp_critic = policy.compute_loss_grasp_critic(
+                observations=observations,
+                actions=actions,
+                rewards=rewards,
+                next_observations=next_observations,
+                done=done,
+                observation_features=observation_features,
+                next_observation_features=next_observation_features,
+                complementary_info=batch.get("complementary_info")  # Pass complementary_info
+            )
+            optimizers["grasp_critic"].zero_grad()
+            loss_grasp_critic.backward()
+            grasp_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                policy.grasp_critic.parameters(), clip_grad_norm_value
+            ).item()
+            optimizers["grasp_critic"].step()
+
+            # update grasp critic target network
+            policy.update_grasp_target_networks()
 
         batch = replay_buffer.sample(batch_size)
 
@@ -651,6 +672,28 @@ def add_actor_information_and_train(
         training_infos["loss_critic"] = loss_critic.item()
         training_infos["critic_grad_norm"] = critic_grad_norm
 
+        # Add gripper critic optimization
+        loss_grasp_critic = policy.compute_loss_grasp_critic(
+            observations=observations,
+            actions=actions,
+            rewards=rewards,
+            next_observations=next_observations,
+            done=done,
+            observation_features=observation_features,
+            next_observation_features=next_observation_features,
+            complementary_info=batch.get("complementary_info")  # Pass complementary_info
+        )
+        optimizers["grasp_critic"].zero_grad()
+        loss_grasp_critic.backward()
+        grasp_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+            policy.grasp_critic.parameters(), clip_grad_norm_value
+        ).item()
+        optimizers["grasp_critic"].step()
+
+        # Add training info for the grasp critic
+        training_infos["loss_grasp_critic"] = loss_grasp_critic.item()
+        training_infos["grasp_critic_grad_norm"] = grasp_critic_grad_norm
+
         # if optimization_step % policy_update_freq == 0:
             # for _ in range(policy_update_freq):
         loss_actor = policy.compute_loss_actor(
@@ -691,6 +734,9 @@ def add_actor_information_and_train(
         training_infos["temperature"] = policy.temperature
 
         policy.update_target_networks()
+
+        # update grasp critic target network
+        policy.update_grasp_target_networks()
 
         if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
             push_actor_policy_to_queue(parameters_queue, policy)
@@ -816,11 +862,19 @@ def make_optimizers_and_scheduler(cfg, policy: nn.Module):
     optimizer_temperature = torch.optim.Adam(
         params=[policy.log_alpha], lr=policy.config.critic_lr
     )
+
+    # Add grasp critic optimizer
+    optimizer_grasp_critic = torch.optim.Adam(
+        params=policy.grasp_critic.parameters(), 
+        lr=policy.config.critic_lr
+    )
+
     lr_scheduler = None
     optimizers = {
         "actor": optimizer_actor,
         "critic": optimizer_critic,
         "temperature": optimizer_temperature,
+        "grasp_critic": optimizer_grasp_critic,
     }
     return optimizers, lr_scheduler
 
