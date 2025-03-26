@@ -9,8 +9,8 @@ robot:
 env:
   name: panda_sim
   task: null
-  state_dim: 17
-  action_dim: 3
+  state_dim: 18
+  action_dim: 4
   fps: ${fps}
   device: cuda
 
