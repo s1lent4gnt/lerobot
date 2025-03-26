@@ -122,6 +122,27 @@ class SACPolicy(
         self.critic_ensemble = torch.compile(self.critic_ensemble)
         self.critic_target = torch.compile(self.critic_target)
 
+        # Create grasp critic
+        self.grasp_critic = GraspCritic(
+            encoder=encoder_critic,
+            output_dim=config.grasp_critic_output_dim,
+            input_dim=encoder_critic.output_dim,
+            **config.grasp_critic_network_kwargs,
+        )
+
+        # Create target grasp critic
+        self.grasp_critic_target = GraspCritic(
+            encoder=encoder_critic,
+            output_dim=config.grasp_critic_output_dim,
+            input_dim=encoder_critic.output_dim,
+            **config.grasp_critic_network_kwargs,
+        )
+
+        self.grasp_critic_target.load_state_dict(self.grasp_critic.state_dict())
+
+        self.grasp_critic = torch.compile(self.grasp_critic)
+        self.grasp_critic_target = torch.compile(self.grasp_critic_target)
+
         self.actor = Policy(
             encoder=encoder_actor,
             network=MLP(
@@ -276,6 +297,12 @@ class SACPolicy(
         critics = self.critic_target if use_target else self.critic_ensemble
         q_values = critics(observations, actions, observation_features)
         return q_values
+    
+    def grasp_critic_forward(self, observations, use_target=False, observation_features=None):
+        """Forward pass through a grasp critic network"""
+        grasp_critics = self.grasp_critic_target if use_target else self.grasp_critic
+        q_values = grasp_critics(observations, observation_features)
+        return q_values
 
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor | float]: ...
     def update_target_networks(self):
@@ -283,6 +310,18 @@ class SACPolicy(
         for target_param, param in zip(
             self.critic_target.parameters(),
             self.critic_ensemble.parameters(),
+            strict=False,
+        ):
+            target_param.data.copy_(
+                param.data * self.config.critic_target_update_weight
+                + target_param.data * (1.0 - self.config.critic_target_update_weight)
+            )
+    
+    def update_grasp_target_networks(self):
+        """Update grasp target networks with exponential moving average"""
+        for target_param, param in zip(
+            self.grasp_critic_target.parameters(),
+            self.grasp_critic.parameters(),
             strict=False,
         ):
             target_param.data.copy_(
@@ -352,6 +391,34 @@ class SACPolicy(
             ).mean(1)
         ).sum()
         return critics_loss
+    
+    def compute_loss_grasp_critic(self, observations, actions, rewards, next_observations, done, observation_features=None, next_observation_features=None, complementary_info=None):
+
+        batch_size = rewards.shape[0]
+        grasp_actions = (actions[:, -1].long() + 1).clamp(0, 2)  # Map [-1, 0, 1] -> [0, 1, 2]
+
+        # Get the grasp penalty from complementary_info
+        grasp_penalty = torch.zeros_like(rewards)
+        if complementary_info is not None and "grasp_penalty" in complementary_info:
+            grasp_penalty = complementary_info["grasp_penalty"]
+
+        with torch.no_grad():
+            next_grasp_qs = self.grasp_critic_forward(next_observations, use_target=False)
+            best_next_grasp_action = torch.argmax(next_grasp_qs, dim=-1)
+
+            target_next_grasp_qs = self.grasp_critic_forward(next_observations, use_target=True)
+            target_next_grasp_q = target_next_grasp_qs[torch.arange(batch_size), best_next_grasp_action]
+
+        grasp_rewards = rewards + grasp_penalty
+        target_grasp_q = grasp_rewards + (1 - done) * self.config.discount * target_next_grasp_q
+
+        predicted_grasp_qs = self.grasp_critic_forward(observations, use_target=False)
+
+        predicted_grasp_q = predicted_grasp_qs[torch.arange(batch_size), grasp_actions]
+
+        grasp_critic_loss = F.mse_loss(input=predicted_grasp_q, target=target_grasp_q, reduction="mean")
+
+        return grasp_critic_loss
 
     def compute_loss_temperature(
         self, observations, observation_features: Tensor | None = None
@@ -567,6 +634,57 @@ class CriticEnsemble(nn.Module):
         # Stack outputs to match expected shape [num_critics, batch_size]
         q_values = torch.stack([q.squeeze(-1) for q in q_values], dim=0)
         return q_values
+
+
+class GraspCritic(nn.Module):
+    def __init__(
+        self,
+        encoder,
+        output_dim,
+        input_dim: int,
+        hidden_dims: list[int],
+        activations: Callable[[torch.Tensor], torch.Tensor] | str = nn.SiLU(),
+        activate_final: bool = False,
+        dropout_rate: Optional[float] = None,
+        init_final: Optional[float] = None,
+        final_activation: Callable[[torch.Tensor], torch.Tensor] | str | None = None,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.net = MLP(
+            input_dim=input_dim,
+            hidden_dims=hidden_dims,
+            activations=activations,
+            activate_final=activate_final,
+            dropout_rate=dropout_rate,
+            final_activation=final_activation,
+        )
+        self.output_dim = output_dim
+
+        self.parameters_to_optimize = []
+        # Handle the case where a part of the encoder if frozen
+        if self.encoder is not None:
+            self.parameters_to_optimize += list(self.encoder.parameters_to_optimize)
+        self.parameters_to_optimize += list(self.net.parameters())
+
+        self.output_layer = nn.Linear(in_features=hidden_dims[-1], out_features=self.output_dim)
+        if init_final is not None:
+            nn.init.uniform_(self.output_layer.weight, -init_final, init_final)
+            nn.init.uniform_(self.output_layer.bias, -init_final, init_final)
+        else:
+            orthogonal_init()(self.output_layer.weight)
+
+    def forward(self, observations, observation_features=None) -> torch.Tensor:
+        device = get_device_from_parameters(self)
+
+        observations = {k: v.to(device) for k, v in observations.items()}
+
+        obs_enc = (
+            observation_features
+            if observation_features is not None
+            else (observations if self.encoder is None else self.encoder(observations))
+        )
+        return self.output_layer(self.net(obs_enc))
 
 
 class Policy(nn.Module):
