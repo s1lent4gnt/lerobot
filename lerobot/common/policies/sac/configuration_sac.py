@@ -85,9 +85,17 @@ class SACConfig:
     target_entropy: float | None = None
     use_backup_entropy: bool = False
     grad_clip_norm: float = 40.0
+    grasp_critic_output_dim: int = 3
     critic_network_kwargs: dict[str, Any] = field(
         default_factory=lambda: {
             "hidden_dims": [256, 256],
+            "activate_final": True,
+            "final_activation": None,
+        }
+    )
+    grasp_critic_network_kwargs: dict[str, Any] = field(
+        default_factory=lambda: {
+            "hidden_dims": [128, 128],
             "activate_final": True,
             "final_activation": None,
         }
