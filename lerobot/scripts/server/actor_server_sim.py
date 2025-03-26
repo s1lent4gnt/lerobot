@@ -303,8 +303,12 @@ def act_with_policy(
 
     logging.info("make_env online")
 
+    # online_env = make_robot_env(
+    #     robot=robot, reward_classifier=reward_classifier, cfg=cfg
+    # )
+
     online_env = make_robot_env(
-        robot=robot, reward_classifier=reward_classifier, cfg=cfg
+        robot=robot, reward_classifier=None, cfg=cfg
     )
 
     set_global_seed(cfg.seed)
