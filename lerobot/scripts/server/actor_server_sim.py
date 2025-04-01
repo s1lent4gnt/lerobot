@@ -64,6 +64,7 @@ from lerobot.common.utils.utils import init_logging
 from lerobot.scripts.server.utils import get_last_item_from_queue
 
 from lerobot.franka_sim.franka_sim.utils.viewer_utils import DualMujocoViewer
+import mujoco
 
 ACTOR_SHUTDOWN_TIMEOUT = 30
 
@@ -343,13 +344,14 @@ def act_with_policy(
     episode_intervention = False
 
     # Create the dual viewer
-    dual_viewer = DualMujocoViewer(online_env.model, online_env.data)
+    # dual_viewer = DualMujocoViewer(online_env.model, online_env.data)
 
     # Add counters for intervention rate calculation
     episode_intervention_steps = 0
     episode_total_steps = 0
 
-    with dual_viewer as viewer:
+    # with dual_viewer as viewer:
+    with mujoco.viewer.launch_passive(online_env.model, online_env.data) as viewer:
         for interaction_step in range(cfg.training.online_steps):
             start_time = time.perf_counter()
             viewer.sync()

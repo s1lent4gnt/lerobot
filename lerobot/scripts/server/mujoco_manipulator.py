@@ -919,6 +919,8 @@ class EEActionWrapper(gym.ActionWrapper):
         position_action = action[:3]
         gripper_action = action[3] if len(action) > 3 else 0.0
 
+        # print(f"gripper action = {gripper_action}")
+
         # Set the mocap position.
         current_ee_pos = self.env.data.mocap_pos[0].copy()
         npos = np.clip(current_ee_pos + position_action * 0.1, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
@@ -1233,7 +1235,10 @@ class GripperPenaltyWrapper(gym.Wrapper):
     def step(self, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
 
+        print(f"*** Gripper action = {action[-1]} *** last gripper pos = {self.last_gripper_pos}")
+
         if (action[-1] < -0.5 and self.last_gripper_pos > 0.9) or (action[-1] > 0.5 and self.last_gripper_pos < 0.9):
+            print("Penalty!!!")
             info["grasp_penalty"] = self.penalty
         else:
             info["grasp_penalty"] = 0.0

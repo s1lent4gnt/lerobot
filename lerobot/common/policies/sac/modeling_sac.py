@@ -410,6 +410,7 @@ class SACPolicy(
             target_next_grasp_q = target_next_grasp_qs[torch.arange(batch_size), best_next_grasp_action]
 
         grasp_rewards = rewards + grasp_penalty
+        # print(f"*** GRASP REWARD = {grasp_rewards} ***")
         target_grasp_q = grasp_rewards + (1 - done) * self.config.discount * target_next_grasp_q
 
         predicted_grasp_qs = self.grasp_critic_forward(observations, use_target=False)
