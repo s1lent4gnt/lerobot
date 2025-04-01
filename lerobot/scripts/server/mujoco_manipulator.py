@@ -930,19 +930,19 @@ class EEActionWrapper(gym.ActionWrapper):
         current_gripper = self.env.data.ctrl[self.env.gripper_ctrl_id] / 255.0
         
         # Calculate gripper delta based on action and scale
-        # gripper_delta = gripper_action * 0.1 # TODO (lilkm): 0.1 is the step size, should be a parameter
+        gripper_delta = gripper_action * 1.0 # TODO (lilkm): 0.1 is the step size, should be a parameter
 
-        if gripper_action > 0:  # Close gripper
-            # Use random values between 0.9-1.0 for closing, like the reference
-            new_gripper = 1.0
-        elif gripper_action < 0:  # Open gripper
-            # Use random values between 0-0.1 for opening
-            new_gripper = 0.0
-        else:
-            new_gripper = current_gripper
+        # if gripper_action > 0:  # Close gripper
+        #     # Use random values between 0.9-1.0 for closing, like the reference
+        #     new_gripper = 1.0
+        # elif gripper_action < 0:  # Open gripper
+        #     # Use random values between 0-0.1 for opening
+        #     new_gripper = -1.0
+        # else:
+        #     new_gripper = current_gripper
         
         # Compute new gripper position and clip to valid range
-        # new_gripper = np.clip(current_gripper + gripper_delta, 0.0, 1.0)
+        new_gripper = np.clip(current_gripper + gripper_delta, 0.0, 1.0)
         
         # Apply to environment (scaling back to 0-255 range)
         # self.env.data.ctrl[self.env.gripper_ctrl_id] = new_gripper * 255.0
@@ -1081,6 +1081,13 @@ class GamepadControlWrapper(gym.Wrapper):
 
         # Get gripper action
         gripper_action = self.controller.get_gripper_action()
+
+        if gripper_action == -1: # close gripper
+            gripper_action = float(np.random.uniform(-1, -0.9))
+        elif gripper_action == 1: # open gripper
+            gripper_action = float(np.random.uniform(0.9, 1))
+        else:
+            gripper_action = 0.0
 
         intervention_is_active = self.controller.should_intervene()
 
@@ -1449,9 +1456,10 @@ def record_dataset(
     )
     
     # Create the dual viewer
-    dual_viewer = DualMujocoViewer(env.model, env.data)
+    # dual_viewer = DualMujocoViewer(env.model, env.data)
 
-    with dual_viewer as viewer:
+    # with dual_viewer as viewer:
+    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         episode_index = 0
         while viewer.is_running():
             obs, _ = env.reset()

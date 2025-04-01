@@ -335,6 +335,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
         qpos = self.data.qpos[self.panda_dof_ids].astype(np.float32)
         gripper_pose = np.array([self.data.qpos[self.gripper_ctrl_id].astype(np.float32)])
+        print(f"gripper POSE = {gripper_pose}")
         qpos = np.concatenate([qpos, gripper_pose])
         obs["observation.state"] = torch.from_numpy(qpos)
 
