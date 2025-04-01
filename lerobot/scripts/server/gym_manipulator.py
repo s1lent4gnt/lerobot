@@ -820,13 +820,13 @@ class EEActionWrapper(gym.ActionWrapper):
             fk_func=self.fk_function,
         )
         if self.use_gripper:
-            # Quantize gripper command to -1, 0 or 1
-            if gripper_command < -0.2:
-                gripper_command = -1.0
-            elif gripper_command > 0.2:
-                gripper_command = 1.0
-            else:
-                gripper_command = 0.0
+            # # Quantize gripper command to -1, 0 or 1
+            # if gripper_command < -0.2:
+            #     gripper_command = -1.0
+            # elif gripper_command > 0.2:
+            #     gripper_command = 1.0
+            # else:
+            #     gripper_command = 0.0
 
             gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
             gripper_action = np.clip(gripper_state + gripper_command, 0, MAX_GRIPPER_COMMAND)
@@ -951,9 +951,9 @@ class GamepadControlWrapper(gym.Wrapper):
         if self.use_gripper:
             gripper_command = self.controller.gripper_command()
             if gripper_command == "open":
-                gamepad_action = np.concatenate([gamepad_action, [1.0]])
+                gamepad_action = np.concatenate([gamepad_action, [1.0]]) # TODO (lilkm) : maybe add randomness like in the original implementation
             elif gripper_command == "close":
-                gamepad_action = np.concatenate([gamepad_action, [-1.0]])
+                gamepad_action = np.concatenate([gamepad_action, [-1.0]]) # TODO (lilkm) : maybe add randomness like in the original implementation
             else:
                 gamepad_action = np.concatenate([gamepad_action, [0.0]])
 

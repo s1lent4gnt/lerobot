@@ -258,7 +258,7 @@ class GamepadController(InputController):
                 elif event.button == 0:
                     self.episode_end_status = "rerecord_episode"
 
-                # RB button (6) for opening gripper
+                # RB button (6) for opening gripper # TODO (lilkm) : I think it is called RT
                 elif event.button == 6:
                     self.open_gripper_command = True
 
@@ -312,30 +312,30 @@ class GamepadController(InputController):
             logging.error("Error reading gamepad. Is it still connected?")
             return 0.0, 0.0, 0.0
     
-    def get_gripper_action(self):
-        """
-        Get gripper action using L3/R3 buttons.
-        Press left stick (L3) to open the gripper.
-        Press right stick (R3) to close the gripper.
-        """
-        import pygame
+    # def get_gripper_action(self):
+    #     """
+    #     Get gripper action using L3/R3 buttons.
+    #     Press left stick (L3) to open the gripper.
+    #     Press right stick (R3) to close the gripper.
+    #     """
+    #     import pygame
         
-        try:
-            # Check if buttons are pressed
-            l3_pressed = self.joystick.get_button(9)
-            r3_pressed = self.joystick.get_button(10)
+    #     try:
+    #         # Check if buttons are pressed
+    #         l3_pressed = self.joystick.get_button(9)
+    #         r3_pressed = self.joystick.get_button(10)
             
-            # Determine action based on button presses
-            if r3_pressed:
-                return 1.0  # Close gripper
-            elif l3_pressed:
-                return -1.0  # Open gripper
-            else:
-                return 0.0  # No change
+    #         # Determine action based on button presses
+    #         if r3_pressed:
+    #             return 1.0  # Close gripper
+    #         elif l3_pressed:
+    #             return -1.0  # Open gripper
+    #         else:
+    #             return 0.0  # No change
                 
-        except pygame.error:
-            logging.error(f"Error reading gamepad. Is it still connected?")
-            return 0.0
+    #     except pygame.error:
+    #         logging.error(f"Error reading gamepad. Is it still connected?")
+    #         return 0.0
 
 
 class GamepadControllerHID(InputController):
