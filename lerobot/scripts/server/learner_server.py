@@ -778,49 +778,49 @@ def add_actor_information_and_train(
         if optimization_step % log_freq == 0:
             logging.info(f"[LEARNER] Number of optimization step: {optimization_step}")
 
-        if save_checkpoint and (
-            optimization_step % save_freq == 0 or optimization_step == online_steps
-        ):
-            logging.info(f"Checkpoint policy after step {optimization_step}")
-            _num_digits = max(6, len(str(online_steps)))
-            step_identifier = f"{optimization_step:0{_num_digits}d}"
-            interaction_step = (
-                interaction_message["Interaction step"]
-                if interaction_message is not None
-                else 0
-            )
-            logger.save_checkpoint(
-                optimization_step,
-                policy,
-                optimizers,
-                scheduler=None,
-                identifier=step_identifier,
-                interaction_step=interaction_step,
-            )
+        # if save_checkpoint and (
+        #     optimization_step % save_freq == 0 or optimization_step == online_steps
+        # ):
+        #     logging.info(f"Checkpoint policy after step {optimization_step}")
+        #     _num_digits = max(6, len(str(online_steps)))
+        #     step_identifier = f"{optimization_step:0{_num_digits}d}"
+        #     interaction_step = (
+        #         interaction_message["Interaction step"]
+        #         if interaction_message is not None
+        #         else 0
+        #     )
+        #     logger.save_checkpoint(
+        #         optimization_step,
+        #         policy,
+        #         optimizers,
+        #         scheduler=None,
+        #         identifier=step_identifier,
+        #         interaction_step=interaction_step,
+        #     )
 
-            # TODO : temporarly save replay buffer here, remove later when on the robot
-            # We want to control this with the keyboard inputs
-            dataset_dir = logger.log_dir / "dataset"
-            if dataset_dir.exists() and dataset_dir.is_dir():
-                shutil.rmtree(
-                    dataset_dir,
-                )
-            replay_buffer.to_lerobot_dataset(
-                dataset_repo_id, fps=fps, root=logger.log_dir / "dataset"
-            )
-            if offline_replay_buffer is not None:
-                dataset_dir = logger.log_dir / "dataset_offline"
+        #     # TODO : temporarly save replay buffer here, remove later when on the robot
+        #     # We want to control this with the keyboard inputs
+        #     dataset_dir = logger.log_dir / "dataset"
+        #     if dataset_dir.exists() and dataset_dir.is_dir():
+        #         shutil.rmtree(
+        #             dataset_dir,
+        #         )
+        #     replay_buffer.to_lerobot_dataset(
+        #         dataset_repo_id, fps=fps, root=logger.log_dir / "dataset"
+        #     )
+        #     if offline_replay_buffer is not None:
+        #         dataset_dir = logger.log_dir / "dataset_offline"
 
-                if dataset_dir.exists() and dataset_dir.is_dir():
-                    shutil.rmtree(
-                        dataset_dir,
-                    )
+        #         if dataset_dir.exists() and dataset_dir.is_dir():
+        #             shutil.rmtree(
+        #                 dataset_dir,
+        #             )
 
-                offline_replay_buffer.to_lerobot_dataset(
-                    cfg.dataset_repo_id,
-                    fps=cfg.fps,
-                    root=logger.log_dir / "dataset_offline",
-                )
+        #         offline_replay_buffer.to_lerobot_dataset(
+        #             cfg.dataset_repo_id,
+        #             fps=cfg.fps,
+        #             root=logger.log_dir / "dataset_offline",
+        #         )
 
             logging.info("Resume training")
 
