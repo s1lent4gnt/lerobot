@@ -103,14 +103,17 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self.current_joint_positions = self.data.qpos[self.panda_dof_ids].astype(np.float32)
 
         # Retrieve the size of the joint position interval bound.
-        self.relative_bounds_size = (
-            (
-                self.cfg.robot.joint_position_relative_bounds["max"]
-                - self.cfg.robot.joint_position_relative_bounds["min"]
-            )
-            if self.cfg.robot.joint_position_relative_bounds is not None
-            else None
-        )
+        self.relative_bounds_size = None
+        # self.relative_bounds_size = (
+        #     (
+        #         self.cfg.robot.joint_position_relative_bounds["max"]
+        #         - self.cfg.robot.joint_position_relative_bounds["min"]
+        #     )
+        #     if self.cfg.robot.joint_position_relative_bounds is not None
+        #     else None
+        # )
+
+        # self.robot.config.joint_position_relative_bounds = None
 
         self.cfg.robot.max_relative_target = (
             self.relative_bounds_size.float()
@@ -335,7 +338,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
         qpos = self.data.qpos[self.panda_dof_ids].astype(np.float32)
         gripper_pose = np.array([self.data.qpos[self.gripper_ctrl_id].astype(np.float32)])
-        print(f"gripper POSE = {gripper_pose}")
+        # print(f"gripper POSE = {gripper_pose}")
         qpos = np.concatenate([qpos, gripper_pose])
         obs["observation.state"] = torch.from_numpy(qpos)
 
