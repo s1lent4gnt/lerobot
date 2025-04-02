@@ -1,0 +1,111 @@
+{
+        "type": "gym_manipulator",
+        "robot": {
+            "type": "so100",
+            "leader_arms": {},
+            "follower_arms": {},
+            "cameras": {}
+        },
+        "wrapper": {
+            "display_cameras": false,
+            "delta_action": 0.1,
+            "use_relative_joint_positions": true,
+            "add_joint_velocity_to_observation": true,
+            "add_ee_pose_to_observation": true,
+            "crop_params_dict": {
+                "observation.images.front": [
+                    0,
+                    0,
+                    128,
+                    128
+                ],
+                "observation.images.wrist": [
+                    0,
+                    0,
+                    128,
+                    128
+                ]
+            },
+            "resize_size": [
+                128,
+                128
+            ],
+            "control_time_s": 30.0,
+            "use_gripper": true,
+            "fixed_reset_joint_positions": [
+                -0.18,
+                0.32,
+                -0.0436,
+                -2.35,
+                0.0301,
+                2.67,
+                0.537
+            ],
+            "reset_time_s": 2.5,
+            "joint_masking_action_space": null,
+            "ee_action_space_params": {
+                "x_step_size": 0.03,
+                "y_step_size": 0.03,
+                "z_step_size": 0.03,
+                "bounds": {
+                    "max": [
+                        0.6,
+                        0.3,
+                        0.5
+                    ],
+                    "min": [
+                        0.2,
+                        -0.3,
+                        0.0
+                    ]
+                },
+                "use_gamepad": true
+            }
+        },
+        "name": "franka_sim",
+        "mode": "record",
+        "repo_id": "lilkm/panda_pick_cube_demos",
+        "dataset_root": null,
+        "task": "",
+        "num_episodes": 30,
+        "episode": 0,
+        "pretrained_policy_name_or_path": null,
+        "device": "cpu",
+        "push_to_hub": true,
+        "fps": 10,
+        "features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [
+                    19
+                ]
+            },
+            "action": {
+                "type": "ACTION",
+                "shape": [
+                    4
+                ]
+            }
+        },
+        "features_map": {},
+        "reward_classifier": {
+            "pretrained_path": null,
+            "config_path": null
+        }
+    }
