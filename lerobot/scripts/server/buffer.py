@@ -214,7 +214,8 @@ class ReplayBuffer:
 
         if image_augmentation_function is None:
             base_function = functools.partial(random_shift, pad=4)
-            self.image_augmentation_function = torch.compile(base_function)
+            self.image_augmentation_function = base_function
+            # self.image_augmentation_function = torch.compile(base_function)
         self.use_drq = use_drq
 
     def _initialize_storage(self, state: dict[str, torch.Tensor], action: torch.Tensor):
@@ -336,6 +337,9 @@ class ReplayBuffer:
         batch_dones = self.dones[idx].to(self.device).float()
         batch_truncateds = self.truncateds[idx].to(self.device).float()
 
+        if (batch_actions[:, 3] >= 3).any():
+            print("There is a value greater than or equal to 3")
+
         return BatchTransition(
             state=batch_state,
             action=batch_actions,
@@ -414,7 +418,10 @@ class ReplayBuffer:
                     first_action = first_action[:, action_mask]
 
             if action_delta is not None:
-                first_action = first_action / action_delta
+                # first_action = first_action / action_delta
+                ee_actions = first_action[..., :3] / action_delta
+                gripper_action = first_action[..., 3:]
+                first_action = torch.cat([ee_actions, gripper_action], dim=-1)
 
             replay_buffer._initialize_storage(state=first_state, action=first_action)
 
@@ -435,7 +442,10 @@ class ReplayBuffer:
                     action = action[:, action_mask]
 
             if action_delta is not None:
-                action = action / action_delta
+                # action = action / action_delta
+                ee_actions = action[..., :3] / action_delta
+                gripper_action = action[..., 3:]
+                action = torch.cat([ee_actions, gripper_action], dim=-1)
 
             replay_buffer.add(
                 state=data["state"],
