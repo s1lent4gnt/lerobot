@@ -566,7 +566,10 @@ class ReplayBuffer:
                     first_action = first_action[:, action_mask]
 
             if action_delta is not None:
-                first_action = first_action / action_delta
+                # first_action = first_action / action_delta
+                ee_actions = first_action[..., :3] / action_delta
+                gripper_action = first_action[..., 3:]
+                first_action = torch.cat([ee_actions, gripper_action], dim=-1)
 
             # Get complementary info if available
             first_complementary_info = None
@@ -599,7 +602,10 @@ class ReplayBuffer:
                     action = action[:, action_mask]
 
             if action_delta is not None:
-                action = action / action_delta
+                # action = action / action_delta
+                ee_actions = action[..., :3] / action_delta
+                gripper_action = action[..., 3:]
+                action = torch.cat([ee_actions, gripper_action], dim=-1)
 
             replay_buffer.add(
                 state=data["state"],
