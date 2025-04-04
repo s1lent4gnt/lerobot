@@ -28,7 +28,7 @@ from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeG
 from lerobot.franka_sim.franka_sim.controllers import opspace
 
 logging.basicConfig(level=logging.INFO)
-MAX_GRIPPER_COMMAND = 25
+MAX_GRIPPER_COMMAND = 255
 
 
 class HILSerlRobotEnv(gym.Env):
@@ -373,7 +373,8 @@ class RewardWrapper(gym.Wrapper):
         self.env = env
 
         # NOTE: We got 15% speedup by compiling the model
-        self.reward_classifier = torch.compile(reward_classifier)
+        # self.reward_classifier = torch.compile(reward_classifier)
+        self.reward_classifier = reward_classifier
 
         if isinstance(device, str):
             device = torch.device(device)
@@ -734,13 +735,13 @@ class ResetWrapper(gym.Wrapper):
     def reset(self, *, seed=None, options=None):
         if self.reset_pose is not None:
             start_time = time.perf_counter()
-            log_say("Reset the environment.", play_sounds=True)
+            # log_say("Reset the environment.", play_sounds=True)
             mujoco.mj_resetData(self.env.model, self.env.data)
 
             # Reset arm to home position.
             self.env.data.qpos[self.env.panda_dof_ids] = np.asarray(self.reset_pose)
             # Gripper
-            self.env.data.ctrl[self.env.gripper_ctrl_id] = 255
+            self.env.data.ctrl[self.env.gripper_ctrl_id] = MAX_GRIPPER_COMMAND
             mujoco.mj_forward(self.env.model, self.env.data)
 
             # Reset mocap body to home position.
@@ -764,7 +765,7 @@ class ResetWrapper(gym.Wrapper):
             mujoco.mj_forward(self.env.model, self.env.data)
 
             busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
-            log_say("Reset the environment done.", play_sounds=True)
+            # log_say("Reset the environment done.", play_sounds=True)
         else:
             # log_say(
             #     f"Manually reset the environment for {self.reset_time_s} seconds.",
@@ -802,14 +803,14 @@ class GripperPenaltyWrapper(gym.RewardWrapper):
         self.last_gripper_state = None
 
     def reward(self, reward, action):
-        gripper_state_normalized = self.last_gripper_state / MAX_GRIPPER_COMMAND
+        gripper_state_normalized = self.last_gripper_state
 
         if isinstance(action, tuple):
             action = action[0]
-        action_normalized = action[-1] / MAX_GRIPPER_COMMAND
+        action_normalized = action[-1]
 
-        gripper_penalty_bool = (gripper_state_normalized < 0.1 and action_normalized > 0.9) or (
-            gripper_state_normalized > 0.9 and action_normalized < 0.1
+        gripper_penalty_bool = (gripper_state_normalized < 0.9 and action_normalized > 0.5) or (
+            gripper_state_normalized > 0.9 and action_normalized < -0.5
         )
         # breakpoint()
 
@@ -817,7 +818,7 @@ class GripperPenaltyWrapper(gym.RewardWrapper):
 
     def step(self, action):
         # self.last_gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
-        self.last_gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id]
+        self.last_gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / MAX_GRIPPER_COMMAND
         obs, reward, terminated, truncated, info = self.env.step(action)
         reward = self.reward(reward, action)
         return obs, reward, terminated, truncated, info
@@ -935,6 +936,9 @@ class EEActionWrapper(gym.ActionWrapper):
         if isinstance(action, tuple):
             action, _ = action
 
+        # if action[:-1].shape[0] == 4:
+        #     print("action shape = 3")
+
         if self.use_gripper:
             gripper_command = action[-1]
             action = action[:-1]
@@ -957,7 +961,7 @@ class EEActionWrapper(gym.ActionWrapper):
         #     position_only=True,
         #     fk_func=self.fk_function,
         # )
-        npos = np.clip(current_ee_pos + action * 0.1, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
+        npos = np.clip(current_ee_pos + action * self.env.delta, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
         self.env.data.mocap_pos[0] = npos
 
         for _ in range(49):
@@ -999,10 +1003,10 @@ class EEActionWrapper(gym.ActionWrapper):
             # gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
             # gripper_action = np.clip(gripper_state + gripper_command, 0, MAX_GRIPPER_COMMAND)
             # target_joint_pos[-1] = gripper_action
-            gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / 255.0 # TODO (lilkm) normalize between [0-1]
+            gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / MAX_GRIPPER_COMMAND # TODO (lilkm) normalize between [0-1]
             gripper_delta = gripper_command * 1.0
             gripper_action = np.clip(gripper_state + gripper_delta, 0.0, 1.0)
-            target_joint_pos = np.concatenate([target_joint_pos, [gripper_action * 255.0]])
+            target_joint_pos = np.concatenate([target_joint_pos, [gripper_action * MAX_GRIPPER_COMMAND]])
 
         return target_joint_pos, is_intervention
 
@@ -1437,6 +1441,9 @@ def record_dataset(env, policy, cfg):
                 if info.get("rerecord_episode", False):
                     break
 
+                print(f"gripper action = {np.array(info['action_intervention'].cpu().squeeze(0).float())[3]}")
+                if np.array(info["action_intervention"].cpu().squeeze(0).float())[3] >= 3:
+                    print("warning!!!")
                 # For teleop, get action from intervention
                 recorded_action = {
                     "action": info["action_intervention"].cpu().squeeze(0).float() if policy is None else action
