@@ -28,7 +28,7 @@ from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeG
 from lerobot.franka_sim.franka_sim.controllers import opspace
 
 logging.basicConfig(level=logging.INFO)
-MAX_GRIPPER_COMMAND = 25
+MAX_GRIPPER_COMMAND = 255
 
 
 class HILSerlRobotEnv(gym.Env):
@@ -740,7 +740,7 @@ class ResetWrapper(gym.Wrapper):
             # Reset arm to home position.
             self.env.data.qpos[self.env.panda_dof_ids] = np.asarray(self.reset_pose)
             # Gripper
-            self.env.data.ctrl[self.env.gripper_ctrl_id] = 255
+            self.env.data.ctrl[self.env.gripper_ctrl_id] = MAX_GRIPPER_COMMAND
             mujoco.mj_forward(self.env.model, self.env.data)
 
             # Reset mocap body to home position.
@@ -802,14 +802,14 @@ class GripperPenaltyWrapper(gym.RewardWrapper):
         self.last_gripper_state = None
 
     def reward(self, reward, action):
-        gripper_state_normalized = self.last_gripper_state / MAX_GRIPPER_COMMAND
+        gripper_state_normalized = self.last_gripper_state
 
         if isinstance(action, tuple):
             action = action[0]
-        action_normalized = action[-1] / MAX_GRIPPER_COMMAND
+        action_normalized = action[-1]
 
-        gripper_penalty_bool = (gripper_state_normalized < 0.1 and action_normalized > 0.9) or (
-            gripper_state_normalized > 0.9 and action_normalized < 0.1
+        gripper_penalty_bool = (gripper_state_normalized < 0.9 and action_normalized > 0.5) or (
+            gripper_state_normalized > 0.9 and action_normalized < -0.5
         )
         # breakpoint()
 
@@ -817,7 +817,7 @@ class GripperPenaltyWrapper(gym.RewardWrapper):
 
     def step(self, action):
         # self.last_gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
-        self.last_gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id]
+        self.last_gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / MAX_GRIPPER_COMMAND
         obs, reward, terminated, truncated, info = self.env.step(action)
         reward = self.reward(reward, action)
         return obs, reward, terminated, truncated, info
@@ -957,7 +957,7 @@ class EEActionWrapper(gym.ActionWrapper):
         #     position_only=True,
         #     fk_func=self.fk_function,
         # )
-        npos = np.clip(current_ee_pos + action * 0.1, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
+        npos = np.clip(current_ee_pos + action * self.env.delta, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
         self.env.data.mocap_pos[0] = npos
 
         for _ in range(49):
@@ -999,10 +999,10 @@ class EEActionWrapper(gym.ActionWrapper):
             # gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
             # gripper_action = np.clip(gripper_state + gripper_command, 0, MAX_GRIPPER_COMMAND)
             # target_joint_pos[-1] = gripper_action
-            gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / 255.0 # TODO (lilkm) normalize between [0-1]
+            gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / MAX_GRIPPER_COMMAND # TODO (lilkm) normalize between [0-1]
             gripper_delta = gripper_command * 1.0
             gripper_action = np.clip(gripper_state + gripper_delta, 0.0, 1.0)
-            target_joint_pos = np.concatenate([target_joint_pos, [gripper_action * 255.0]])
+            target_joint_pos = np.concatenate([target_joint_pos, [gripper_action * MAX_GRIPPER_COMMAND]])
 
         return target_joint_pos, is_intervention
 
