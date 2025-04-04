@@ -114,8 +114,8 @@ class SACPolicy(
 
         self.critic_target.load_state_dict(self.critic_ensemble.state_dict())
 
-        self.critic_ensemble = torch.compile(self.critic_ensemble)
-        self.critic_target = torch.compile(self.critic_target)
+        # self.critic_ensemble = torch.compile(self.critic_ensemble)
+        # self.critic_target = torch.compile(self.critic_target)
 
         self.grasp_critic = None
         self.grasp_critic_target = None
@@ -139,8 +139,8 @@ class SACPolicy(
 
             self.grasp_critic_target.load_state_dict(self.grasp_critic.state_dict())
 
-            self.grasp_critic = torch.compile(self.grasp_critic)
-            self.grasp_critic_target = torch.compile(self.grasp_critic_target)
+            # self.grasp_critic = torch.compile(self.grasp_critic)
+            # self.grasp_critic_target = torch.compile(self.grasp_critic_target)
 
         self.actor = Policy(
             encoder=encoder_actor,
@@ -189,7 +189,7 @@ class SACPolicy(
 
         if self.config.num_discrete_actions is not None:
             discrete_action_value = self.grasp_critic(batch)
-            discrete_action = torch.argmax(discrete_action_value, dim=-1, keepdim=True)
+            discrete_action = torch.argmax(discrete_action_value, dim=-1, keepdim=True) - 1
             actions = torch.cat([actions, discrete_action], dim=-1)
 
         return actions
@@ -412,7 +412,7 @@ class SACPolicy(
         # In the buffer we have the full action space (continuous + discrete)
         # We need to split them before concatenating them in the critic forward
         actions_discrete: Tensor = actions[:, DISCRETE_DIMENSION_INDEX:].clone()
-        actions_discrete = actions_discrete.long()
+        actions_discrete = actions_discrete.long() + 1
 
         with torch.no_grad():
             # For DQN, select actions using online network, evaluate with target network
