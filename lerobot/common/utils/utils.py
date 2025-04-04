@@ -108,29 +108,77 @@ def is_amp_available(device: str):
         raise ValueError(f"Unknown device '{device}.")
 
 
-def init_logging(log_file=None):
+def init_logging(log_file=None, max_bytes=10*1024*1024, backup_count=5):
+    """
+    Initialize logging with robust error handling and log rotation.
+    
+    Args:
+        log_file: Path to the log file. If None, only console logging is configured.
+        max_bytes: Maximum size of each log file before rotation (default: 10MB).
+        backup_count: Number of backup log files to keep (default: 5).
+    """
     def custom_format(record):
         dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         fnameline = f"{record.pathname}:{record.lineno}"
         message = f"{record.levelname} [PID: {os.getpid()}] {dt} {fnameline[-15:]:>15} {record.msg}"
         return message
 
+    # Configure basic logging
     logging.basicConfig(level=logging.INFO)
 
+    # Remove any existing handlers
     for handler in logging.root.handlers[:]:
+        try:
+            handler.close()  # Properly close handlers to release resources
+        except:
+            pass  # Ignore errors during cleanup
         logging.root.removeHandler(handler)
 
+    # Create formatter
     formatter = logging.Formatter()
     formatter.format = custom_format
+    
+    # Add console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logging.getLogger().addHandler(console_handler)
 
+    # Add file handler if log_file is specified
     if log_file is not None:
-        # File handler
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        logging.getLogger().addHandler(file_handler)
+        try:
+            # Create directory for log file if it doesn't exist
+            log_dir = os.path.dirname(log_file)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            
+            # Use RotatingFileHandler instead of FileHandler for log rotation
+            from logging.handlers import RotatingFileHandler
+            
+            # Create a rotating file handler that handles I/O errors gracefully
+            class SafeRotatingFileHandler(RotatingFileHandler):
+                def emit(self, record):
+                    try:
+                        super().emit(record)
+                    except Exception as e:
+                        # Log to stderr instead of raising an exception
+                        import sys
+                        sys.stderr.write(f"Error writing to log file: {e}\n")
+            
+            # Create rotating file handler
+            file_handler = SafeRotatingFileHandler(
+                log_file,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(formatter)
+            logging.getLogger().addHandler(file_handler)
+            
+            logging.info(f"Logging to file: {log_file} (with rotation)")
+        except Exception as e:
+            # If file logging setup fails, log to console and continue
+            logging.error(f"Failed to set up file logging: {e}")
+            logging.warning("Continuing with console logging only")
 
 
 def format_big_number(num, precision=0):
