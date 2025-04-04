@@ -4,7 +4,7 @@
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
-    "batch_size": 256,
+    "batch_size": 16,
     "steps": 100000,
     "log_freq": 1,
     "save_checkpoint": true,
@@ -59,7 +59,7 @@
                 ]
             }
         },
-        "device": "cuda",
+        "device": "cpu",
         "use_amp": false,
         "dataset_stats": {
             "observation.images.front": {
@@ -274,7 +274,7 @@
         "num_episodes": 30,
         "episode": 0,
         "pretrained_policy_name_or_path": null,
-        "device": "cuda",
+        "device": "cpu",
         "push_to_hub": true,
         "fps": 10,
         "features": {
