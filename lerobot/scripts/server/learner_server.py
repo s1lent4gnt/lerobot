@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import logging
+# import logging
 import os
 import shutil
 import time
@@ -56,7 +56,7 @@ from lerobot.common.utils.train_utils import (
 from lerobot.common.utils.utils import (
     format_big_number,
     get_safe_torch_device,
-    init_logging,
+    # init_logging,
 )
 from lerobot.common.utils.wandb_utils import WandBLogger
 from lerobot.configs import parser
@@ -75,7 +75,7 @@ from lerobot.scripts.server.utils import setup_process_handlers
 
 LOG_PREFIX = "[LEARNER]"
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
 #################################################
 # MAIN ENTRY POINTS AND CORE ALGORITHM FUNCTIONS #
@@ -87,7 +87,8 @@ def train_cli(cfg: TrainPipelineConfig):
     if not use_threads(cfg):
         import torch.multiprocessing as mp
 
-        mp.set_start_method("spawn")
+        print("processes !!!!")
+        mp.set_start_method("fork")
 
     # Use the job_name from the config
     train(
@@ -95,7 +96,7 @@ def train_cli(cfg: TrainPipelineConfig):
         job_name=cfg.job_name,
     )
 
-    logging.info("[LEARNER] train_cli finished")
+    # logging.info("[LEARNER] train_cli finished")
 
 
 def train(cfg: TrainPipelineConfig, job_name: str | None = None):
@@ -121,18 +122,21 @@ def train(cfg: TrainPipelineConfig, job_name: str | None = None):
     log_file = os.path.join(log_dir, f"learner_{job_name}.log")
 
     # Initialize logging with explicit log file
-    init_logging(log_file=log_file)
-    logging.info(f"Learner logging initialized, writing to {log_file}")
-    logging.info(pformat(cfg.to_dict()))
+    # init_logging(log_file=log_file)
+    # logging.info(f"Learner logging initialized, writing to {log_file}")
+    # logging.info(pformat(cfg.to_dict()))
 
-    # Setup WandB logging if enabled
-    if cfg.wandb.enable and cfg.wandb.project:
-        from lerobot.common.utils.wandb_utils import WandBLogger
+    # # Setup WandB logging if enabled
+    # if cfg.wandb.enable and cfg.wandb.project:
+    #     from lerobot.common.utils.wandb_utils import WandBLogger
 
-        wandb_logger = WandBLogger(cfg)
-    else:
-        wandb_logger = None
-        logging.info(colored("Logs will be saved locally.", "yellow", attrs=["bold"]))
+    #     wandb_logger = WandBLogger(cfg)
+    # else:
+    #     wandb_logger = None
+    #     # logging.info(colored("Logs will be saved locally.", "yellow", attrs=["bold"]))
+
+    wandb_logger = None
+    # logging.info(colored("WandB logging disabled. Logs will be saved locally.", "yellow", attrs=["bold"]))
 
     # Handle resume logic
     cfg = handle_resume_logic(cfg)
@@ -201,22 +205,22 @@ def start_learner_threads(
         interaction_message_queue=interaction_message_queue,
         parameters_queue=parameters_queue,
     )
-    logging.info("[LEARNER] Training process stopped")
+    # logging.info("[LEARNER] Training process stopped")
 
-    logging.info("[LEARNER] Closing queues")
+    # logging.info("[LEARNER] Closing queues")
     transition_queue.close()
     interaction_message_queue.close()
     parameters_queue.close()
 
     communication_process.join()
-    logging.info("[LEARNER] Communication process joined")
+    # logging.info("[LEARNER] Communication process joined")
 
-    logging.info("[LEARNER] join queues")
+    # logging.info("[LEARNER] join queues")
     transition_queue.cancel_join_thread()
     interaction_message_queue.cancel_join_thread()
     parameters_queue.cancel_join_thread()
 
-    logging.info("[LEARNER] queues closed")
+    # logging.info("[LEARNER] queues closed")
 
 
 #################################################
@@ -275,10 +279,10 @@ def add_actor_information_and_train(
         log_dir = os.path.join(cfg.output_dir, "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, f"learner_train_process_{os.getpid()}.log")
-        init_logging(log_file=log_file)
-        logging.info("Initialized logging for actor information and training process")
+        # init_logging(log_file=log_file)
+        # logging.info("Initialized logging for actor information and training process")
 
-    logging.info("Initializing policy")
+    # logging.info("Initializing policy")
 
     policy: SACPolicy = make_policy(
         cfg=cfg.policy,
@@ -317,7 +321,7 @@ def add_actor_information_and_train(
         )
         batch_size: int = batch_size // 2  # We will sample from both replay buffer
 
-    logging.info("Starting learner thread")
+    # logging.info("Starting learner thread")
     interaction_message, transition = None, None
     optimization_step = resume_optimization_step if resume_optimization_step is not None else 0
     interaction_step_shift = resume_interaction_step if resume_interaction_step is not None else 0
@@ -330,11 +334,11 @@ def add_actor_information_and_train(
     while True:
         # Exit the training loop if shutdown is requested
         if shutdown_event is not None and shutdown_event.is_set():
-            logging.info("[LEARNER] Shutdown signal received. Exiting...")
+            # logging.info("[LEARNER] Shutdown signal received. Exiting...")
             break
 
         # Process all available transitions
-        logging.debug("[LEARNER] Waiting for transitions")
+        # logging.debug("[LEARNER] Waiting for transitions")
         process_transitions(
             transition_queue=transition_queue,
             replay_buffer=replay_buffer,
@@ -343,23 +347,23 @@ def add_actor_information_and_train(
             dataset_repo_id=dataset_repo_id,
             shutdown_event=shutdown_event,
         )
-        logging.debug("[LEARNER] Received transitions")
+        # logging.debug("[LEARNER] Received transitions")
 
         # Process all available interaction messages
-        logging.debug("[LEARNER] Waiting for interactions")
+        # logging.debug("[LEARNER] Waiting for interactions")
         interaction_message = process_interaction_messages(
             interaction_message_queue=interaction_message_queue,
             interaction_step_shift=interaction_step_shift,
             wandb_logger=wandb_logger,
             shutdown_event=shutdown_event,
         )
-        logging.debug("[LEARNER] Received interactions")
+        # logging.debug("[LEARNER] Received interactions")
 
         # Wait until the replay buffer has enough samples
         if len(replay_buffer) < online_step_before_learning:
             continue
 
-        logging.debug("[LEARNER] Starting optimization loop")
+        # logging.debug("[LEARNER] Starting optimization loop")
         time_for_one_optimization_step = time.time()
         for _ in range(utd_ratio - 1):
             batch = replay_buffer.sample(batch_size=batch_size)
@@ -369,6 +373,8 @@ def add_actor_information_and_train(
                 batch = concatenate_batch_transitions(
                     left_batch_transitions=batch, right_batch_transition=batch_offline
                 )
+
+                # batch = batch_offline
 
             actions = batch["action"]
             rewards = batch["reward"]
@@ -391,6 +397,9 @@ def add_actor_information_and_train(
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
             }
+
+            if (actions[:, 3] >= 3).any():
+                print("There is a value greater than or equal to 3")
 
             # Use the forward method for critic loss (includes both main critic and grasp critic)
             critic_output = policy.forward(forward_batch, model="critic")
@@ -426,6 +435,8 @@ def add_actor_information_and_train(
                 left_batch_transitions=batch, right_batch_transition=batch_offline
             )
 
+            # batch = batch_offline
+
         actions = batch["action"]
         rewards = batch["reward"]
         observations = batch["state"]
@@ -448,6 +459,9 @@ def add_actor_information_and_train(
             "observation_feature": observation_features,
             "next_observation_feature": next_observation_features,
         }
+
+        if (actions[:, 3] >= 3).any():
+            print("There is a value greater than or equal to 3")
 
         # Use the forward method for critic loss (includes both main critic and grasp critic)
         critic_output = policy.forward(forward_batch, model="critic")
@@ -540,7 +554,7 @@ def add_actor_information_and_train(
         time_for_one_optimization_step = time.time() - time_for_one_optimization_step
         frequency_for_one_optimization_step = 1 / (time_for_one_optimization_step + 1e-9)
 
-        logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
+        # logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
 
         # Log optimization frequency
         if wandb_logger:
@@ -555,22 +569,23 @@ def add_actor_information_and_train(
 
         optimization_step += 1
         if optimization_step % log_freq == 0:
-            logging.info(f"[LEARNER] Number of optimization step: {optimization_step}")
+            print(f"[LEARNER] Number of optimization step: {optimization_step}")
+            # logging.info(f"[LEARNER] Number of optimization step: {optimization_step}")
 
-        # Save checkpoint at specified intervals
-        if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == online_steps):
-            save_training_checkpoint(
-                cfg=cfg,
-                optimization_step=optimization_step,
-                online_steps=online_steps,
-                interaction_message=interaction_message,
-                policy=policy,
-                optimizers=optimizers,
-                replay_buffer=replay_buffer,
-                offline_replay_buffer=offline_replay_buffer,
-                dataset_repo_id=dataset_repo_id,
-                fps=fps,
-            )
+        # # Save checkpoint at specified intervals
+        # if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == online_steps):
+        #     save_training_checkpoint(
+        #         cfg=cfg,
+        #         optimization_step=optimization_step,
+        #         online_steps=online_steps,
+        #         interaction_message=interaction_message,
+        #         policy=policy,
+        #         optimizers=optimizers,
+        #         replay_buffer=replay_buffer,
+        #         offline_replay_buffer=offline_replay_buffer,
+        #         dataset_repo_id=dataset_repo_id,
+        #         fps=fps,
+        #     )
 
 
 def start_learner_server(
@@ -597,8 +612,8 @@ def start_learner_server(
         log_file = os.path.join(log_dir, f"learner_server_process_{os.getpid()}.log")
 
         # Initialize logging with explicit log file
-        init_logging(log_file=log_file)
-        logging.info("Learner server process logging initialized")
+        # init_logging(log_file=log_file)
+        # logging.info("Learner server process logging initialized")
 
         # Setup process handlers to handle shutdown signal
         # But use shutdown event from the main process
@@ -631,12 +646,13 @@ def start_learner_server(
 
     server.add_insecure_port(f"{host}:{port}")
     server.start()
-    logging.info("[LEARNER] gRPC server started")
+    print("[LEARNER] gRPC server started")
+    # logging.info("[LEARNER] gRPC server started")
 
     shutdown_event.wait()
-    logging.info("[LEARNER] Stopping gRPC server...")
+    # logging.info("[LEARNER] Stopping gRPC server...")
     server.stop(learner_service.STUTDOWN_TIMEOUT)
-    logging.info("[LEARNER] gRPC server stopped")
+    # logging.info("[LEARNER] gRPC server stopped")
 
 
 def save_training_checkpoint(
@@ -674,7 +690,7 @@ def save_training_checkpoint(
         dataset_repo_id: Repository ID for dataset
         fps: Frames per second for dataset
     """
-    logging.info(f"Checkpoint policy after step {optimization_step}")
+    # logging.info(f"Checkpoint policy after step {optimization_step}")
     _num_digits = max(6, len(str(online_steps)))
     interaction_step = interaction_message["Interaction step"] if interaction_message is not None else 0
 
@@ -723,7 +739,7 @@ def save_training_checkpoint(
             root=dataset_offline_dir,
         )
 
-    logging.info("Resume training")
+    # logging.info("Resume training")
 
 
 def make_optimizers_and_scheduler(cfg: TrainPipelineConfig, policy: nn.Module):
@@ -820,13 +836,13 @@ def handle_resume_logic(cfg: TrainPipelineConfig) -> TrainPipelineConfig:
         raise RuntimeError(f"No model checkpoint found in {checkpoint_dir} for resume=True")
 
     # Log that we found a valid checkpoint and are resuming
-    logging.info(
-        colored(
-            "Valid checkpoint found: resume=True detected, resuming previous run",
-            color="yellow",
-            attrs=["bold"],
-        )
-    )
+    # logging.info(
+    #     colored(
+    #         "Valid checkpoint found: resume=True detected, resuming previous run",
+    #         color="yellow",
+    #         attrs=["bold"],
+    #     )
+    # )
 
     # Load config using Draccus
     checkpoint_cfg_path = os.path.join(checkpoint_dir, PRETRAINED_MODEL_DIR, "train_config.json")
@@ -857,7 +873,7 @@ def load_training_state(
     # Construct path to the last checkpoint directory
     checkpoint_dir = os.path.join(cfg.output_dir, CHECKPOINTS_DIR, LAST_CHECKPOINT_LINK)
 
-    logging.info(f"Loading training state from {checkpoint_dir}")
+    # logging.info(f"Loading training state from {checkpoint_dir}")
 
     try:
         # Use the utility function from train_utils which loads the optimizer state
@@ -870,11 +886,11 @@ def load_training_state(
             training_state = torch.load(training_state_path, weights_only=False)
             interaction_step = training_state.get("interaction_step", 0)
 
-        logging.info(f"Resuming from step {step}, interaction step {interaction_step}")
+        # logging.info(f"Resuming from step {step}, interaction step {interaction_step}")
         return step, interaction_step
 
     except Exception as e:
-        logging.error(f"Failed to load training state: {e}")
+        # logging.error(f"Failed to load training state: {e}")
         return None, None
 
 
@@ -889,11 +905,11 @@ def log_training_info(cfg: TrainPipelineConfig, policy: nn.Module) -> None:
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
 
-    logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
-    logging.info(f"{cfg.env.task=}")
-    logging.info(f"{cfg.policy.online_steps=}")
-    logging.info(f"{num_learnable_params=} ({format_big_number(num_learnable_params)})")
-    logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
+    # logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
+    # logging.info(f"{cfg.env.task=}")
+    # logging.info(f"{cfg.policy.online_steps=}")
+    # logging.info(f"{num_learnable_params=} ({format_big_number(num_learnable_params)})")
+    # logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
 
 def initialize_replay_buffer(cfg: TrainPipelineConfig, device: str, storage_device: str) -> ReplayBuffer:
@@ -917,7 +933,7 @@ def initialize_replay_buffer(cfg: TrainPipelineConfig, device: str, storage_devi
             optimize_memory=True,
         )
 
-    logging.info("Resume training load the online dataset")
+    # logging.info("Resume training load the online dataset")
     dataset_path = os.path.join(cfg.output_dir, "dataset")
 
     # NOTE: In RL is possible to not have a dataset.
@@ -956,17 +972,17 @@ def initialize_offline_replay_buffer(
         ReplayBuffer: Initialized offline replay buffer
     """
     if not cfg.resume:
-        logging.info("make_dataset offline buffer")
+        # logging.info("make_dataset offline buffer")
         offline_dataset = make_dataset(cfg)
     else:
-        logging.info("load offline dataset")
+        # logging.info("load offline dataset")
         dataset_offline_path = os.path.join(cfg.output_dir, "dataset_offline")
         offline_dataset = LeRobotDataset(
             repo_id=cfg.dataset.repo_id,
             root=dataset_offline_path,
         )
 
-    logging.info("Convert to a offline replay buffer")
+    # logging.info("Convert to a offline replay buffer")
     offline_replay_buffer = ReplayBuffer.from_lerobot_dataset(
         offline_dataset,
         device=device,
@@ -1043,7 +1059,7 @@ def check_nan_in_transition(
     # Check observations
     for key, tensor in observations.items():
         if torch.isnan(tensor).any():
-            logging.error(f"observations[{key}] contains NaN values")
+            # logging.error(f"observations[{key}] contains NaN values")
             nan_detected = True
             if raise_error:
                 raise ValueError(f"NaN detected in observations[{key}]")
@@ -1051,14 +1067,14 @@ def check_nan_in_transition(
     # Check next state
     for key, tensor in next_state.items():
         if torch.isnan(tensor).any():
-            logging.error(f"next_state[{key}] contains NaN values")
+            # logging.error(f"next_state[{key}] contains NaN values")
             nan_detected = True
             if raise_error:
                 raise ValueError(f"NaN detected in next_state[{key}]")
 
     # Check actions
     if torch.isnan(actions).any():
-        logging.error("actions contains NaN values")
+        # logging.error("actions contains NaN values")
         nan_detected = True
         if raise_error:
             raise ValueError("NaN detected in actions")
@@ -1067,7 +1083,7 @@ def check_nan_in_transition(
 
 
 def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
-    logging.debug("[LEARNER] Pushing actor policy to the queue")
+    # logging.debug("[LEARNER] Pushing actor policy to the queue")
     state_dict = move_state_dict_to_device(policy.actor.state_dict(), device="cpu")
     state_bytes = state_to_bytes(state_dict)
     parameters_queue.put(state_bytes)
@@ -1119,7 +1135,7 @@ def process_transitions(
                 actions=transition["action"],
                 next_state=transition["next_state"],
             ):
-                logging.warning("[LEARNER] NaN detected in transition, skipping")
+                # logging.warning("[LEARNER] NaN detected in transition, skipping")
                 continue
 
             replay_buffer.add(**transition)
@@ -1162,4 +1178,4 @@ def process_interaction_messages(
 
 if __name__ == "__main__":
     train_cli()
-    logging.info("[LEARNER] main finished")
+    # logging.info("[LEARNER] main finished")
