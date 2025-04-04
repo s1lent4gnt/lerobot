@@ -99,7 +99,7 @@
             "action": {
                 "type": "ACTION",
                 "shape": [
-                    4
+                    3
                 ]
             }
         },
