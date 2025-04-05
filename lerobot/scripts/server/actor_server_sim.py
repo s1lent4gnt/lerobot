@@ -249,7 +249,7 @@ def act_with_policy(
     episode_intervention_steps = 0
     episode_total_steps = 0
 
-    with mujoco.viewer.launch_passive(online_env.model, online_env.data) as viewer:
+    with mujoco.viewer.launch_passive(online_env.model, online_env.data, show_left_ui=False, show_right_ui=False) as viewer:
         for interaction_step in range(cfg.policy.online_steps):
             start_time = time.perf_counter()
             viewer.sync()
