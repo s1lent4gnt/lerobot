@@ -1,5 +1,5 @@
 {
-        "type": "gym_manipulator",
+"type": "gym_manipulator",
         "robot": {
             "type": "so100",
             "leader_arms": {},
@@ -7,8 +7,9 @@
             "cameras": {}
         },
         "wrapper": {
+            "gripper_penalty": -0.1,
             "display_cameras": false,
-            "delta_action": 0.1,
+            "delta_action": 0.05,
             "use_relative_joint_positions": true,
             "add_joint_velocity_to_observation": true,
             "add_ee_pose_to_observation": true,
@@ -33,20 +34,20 @@
             "control_time_s": 30.0,
             "use_gripper": true,
             "fixed_reset_joint_positions": [
-                -0.18,
-                0.32,
-                -0.0436,
+                0.0,
+                -0.785,
+                0.0,
                 -2.35,
-                0.0301,
-                2.67,
-                0.537
+                0.0,
+                1.57,
+                0.785
             ],
             "reset_time_s": 2.5,
             "joint_masking_action_space": null,
             "ee_action_space_params": {
-                "x_step_size": 0.03,
-                "y_step_size": 0.03,
-                "z_step_size": 0.03,
+                "x_step_size": 1.0,
+                "y_step_size": 1.0,
+                "z_step_size": 1.0,
                 "bounds": {
                     "max": [
                         0.6,
