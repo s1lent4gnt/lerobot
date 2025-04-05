@@ -199,7 +199,7 @@ class SACPolicy(
 
         if self.config.num_discrete_actions is not None:
             discrete_action_value = self.grasp_critic(batch, observations_features)
-            discrete_action = torch.argmax(discrete_action_value, dim=-1, keepdim=True)
+            discrete_action = torch.argmax(discrete_action_value, dim=-1, keepdim=True) - 1
             actions = torch.cat([actions, discrete_action], dim=-1)
 
         return actions
