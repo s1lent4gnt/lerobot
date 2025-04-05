@@ -4,11 +4,11 @@
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
-    "batch_size": 16,
+    "batch_size": 256,
     "steps": 100000,
     "log_freq": 1,
     "save_checkpoint": true,
-    "save_freq": 500,
+    "save_freq": 2000,
     "wandb": {
         "enable": true,
         "project": "franka_sim",
@@ -132,15 +132,15 @@
             },
             "action": {
                 "min": [
-                    -0.1,
-                    -0.1,
-                    -0.1
+                    -1.0,
+                    -1.0,
+                    -1.0
 
                 ],
                 "max": [
-                    0.1,
-                    0.1,
-                    0.1
+                    1.0,
+                    1.0,
+                    1.0
                 ]
             }
         },
@@ -152,7 +152,7 @@
         "shared_encoder": true,
         "online_steps": 1000000,
         "online_env_seed": 10000,
-        "online_buffer_capacity": 40000,
+        "online_buffer_capacity": 50000,
         "offline_buffer_capacity": 10000,
         "online_step_before_learning": 100,
         "policy_update_freq": 1,
@@ -163,7 +163,7 @@
         "critic_lr": 0.0003,
         "actor_lr": 0.0003,
         "temperature_lr": 0.0003,
-        "critic_target_update_weight": 0.01,
+        "critic_target_update_weight": 0.05,
         "utd_ratio": 2,
         "state_encoder_hidden_dim": 256,
         "latent_dim": 256,
@@ -188,8 +188,8 @@
         },
         "policy_kwargs": {
             "use_tanh_squash": true,
-            "log_std_min": -5,
-            "log_std_max": 2,
+            "log_std_min": 1e-5,
+            "log_std_max": 5,
             "init_final": 0.05
         },
         "actor_learner_config": {
@@ -211,8 +211,9 @@
             "cameras": {}
         },
         "wrapper": {
+            "gripper_penalty": -0.1,
             "display_cameras": false,
-            "delta_action": 0.1,
+            "delta_action": 0.05,
             "use_relative_joint_positions": true,
             "add_joint_velocity_to_observation": true,
             "add_ee_pose_to_observation": true,
@@ -237,20 +238,20 @@
             "control_time_s": 30.0,
             "use_gripper": true,
             "fixed_reset_joint_positions": [
-                -0.18,
-                0.32,
-                -0.0436,
+                0.0,
+                -0.785,
+                0.0,
                 -2.35,
-                0.0301,
-                2.67,
-                0.537
+                0.0,
+                1.57,
+                0.785
             ],
             "reset_time_s": 2.5,
             "joint_masking_action_space": null,
             "ee_action_space_params": {
-                "x_step_size": 0.03,
-                "y_step_size": 0.03,
-                "z_step_size": 0.03,
+                "x_step_size": 1.0,
+                "y_step_size": 1.0,
+                "z_step_size": 1.0,
                 "bounds": {
                     "max": [
                         0.6,
