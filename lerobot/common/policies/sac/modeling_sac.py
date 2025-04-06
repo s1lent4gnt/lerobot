@@ -565,7 +565,6 @@ class SACObservationEncoder(nn.Module):
         obs_dict = self.input_normalization(obs_dict)
         if len(self.all_image_keys) > 0 and vision_encoder_cache is None:
             vision_encoder_cache = self.get_image_features(obs_dict)
-            feat.append(vision_encoder_cache)
 
         if vision_encoder_cache is not None:
             feat.append(vision_encoder_cache)
