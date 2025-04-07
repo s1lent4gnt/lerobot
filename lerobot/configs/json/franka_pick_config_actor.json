@@ -95,7 +95,7 @@
                     -0.05300621,
                     2.52864378,
                     0.426834,
-                    1.0,
+                    0.0,
                     -100.0,
                     -100.0,
                     -100.0,
@@ -132,15 +132,15 @@
             },
             "action": {
                 "min": [
-                    -1.0,
-                    -1.0,
-                    -1.0
+                    -0.03,
+                    -0.03,
+                    -0.03
 
                 ],
                 "max": [
-                    1.0,
-                    1.0,
-                    1.0
+                    0.03,
+                    0.03,
+                    0.03
                 ]
             }
         },
@@ -153,7 +153,7 @@
         "online_steps": 1000000,
         "online_env_seed": 10000,
         "online_buffer_capacity": 50000,
-        "offline_buffer_capacity": 10000,
+        "offline_buffer_capacity": 100000,
         "online_step_before_learning": 100,
         "policy_update_freq": 1,
         "discount": 0.97,
@@ -163,7 +163,7 @@
         "critic_lr": 0.0003,
         "actor_lr": 0.0003,
         "temperature_lr": 0.0003,
-        "critic_target_update_weight": 0.05,
+        "critic_target_update_weight": 0.005,
         "utd_ratio": 2,
         "state_encoder_hidden_dim": 256,
         "latent_dim": 256,
@@ -211,7 +211,7 @@
             "cameras": {}
         },
         "wrapper": {
-            "gripper_penalty": -0.1,
+            "gripper_penalty": -0.02,
             "display_cameras": false,
             "delta_action": 0.05,
             "use_relative_joint_positions": true,
@@ -246,12 +246,12 @@
                 1.57,
                 0.785
             ],
-            "reset_time_s": 2.5,
+            "reset_time_s": 2.0,
             "joint_masking_action_space": null,
             "ee_action_space_params": {
-                "x_step_size": 1.0,
-                "y_step_size": 1.0,
-                "z_step_size": 1.0,
+                "x_step_size": 0.01,
+                "y_step_size": 0.01,
+                "z_step_size": 0.01,
                 "bounds": {
                     "max": [
                         0.6,
