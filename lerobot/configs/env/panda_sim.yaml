@@ -12,7 +12,7 @@ env:
   state_dim: 18
   action_dim: 4
   fps: ${fps}
-  device: cuda
+  device: cpu
 
   reward_classifier:
     pretrained_path: null

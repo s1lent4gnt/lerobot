@@ -8,7 +8,7 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id: lilkm/panda_pick_cube_demos
+dataset_repo_id: lilkm/panda_pick_cube_demos_old
 
 training:
   # Offline training dataloader
