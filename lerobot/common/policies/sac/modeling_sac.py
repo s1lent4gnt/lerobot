@@ -427,6 +427,16 @@ class SACPolicy(
         if complementary_info is not None:
             gripper_penalties: Tensor | None = complementary_info.get("gripper_penalty")
 
+        MAX_GRIPPER_COMMAND = 255
+        gripper_state_normalized = observations["observation.state"][:, 7] / MAX_GRIPPER_COMMAND # gripper state position in the 8th. and MAX_GRIPPER_COMMAND = 255 for normilized gripper state
+        gripper_action = actions[:, -1]  # last dim is gripper action
+
+        penalty_bool = (
+            ((gripper_state_normalized < 0.9) & (gripper_action > 0.5))
+            | ((gripper_state_normalized > 0.9) & (gripper_action < -0.5))
+        )
+        rewards = rewards - penalty_bool.float() * 0.02  # replace 0.1 with your penalty magnitude
+
         with torch.no_grad():
             # For DQN, select actions using online network, evaluate with target network
             next_grasp_qs = self.grasp_critic_forward(
