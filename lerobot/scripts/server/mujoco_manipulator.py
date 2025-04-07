@@ -23,8 +23,8 @@ from lerobot.scripts.server.kinematics import RobotKinematics
 
 import mujoco
 import mujoco.viewer
-from lerobot.franka_sim.franka_sim.envs.panda_push_gym_env import PandaPushCubeGymEnv, _PANDA_HOME
-from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv, _PANDA_HOME
+from lerobot.franka_sim.franka_sim.envs.panda_push_gym_env import PandaPushCubeGymEnv, _PANDA_HOME, _SAMPLING_BOUNDS
+from lerobot.franka_sim.franka_sim.envs.panda_pick_gym_env import PandaPickCubeGymEnv
 from lerobot.franka_sim.franka_sim.controllers import opspace
 
 logging.basicConfig(level=logging.INFO)
@@ -735,33 +735,33 @@ class ResetWrapper(gym.Wrapper):
         if self.reset_pose is not None:
             start_time = time.perf_counter()
             log_say("Reset the environment.", play_sounds=True)
-            mujoco.mj_resetData(self.env.model, self.env.data)
+            mujoco.mj_resetData(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Reset arm to home position.
-            self.env.data.qpos[self.env.panda_dof_ids] = np.asarray(self.reset_pose)
+            self.env.unwrapped.data.qpos[self.env.unwrapped.panda_dof_ids] = np.asarray(self.reset_pose)
             # Gripper
-            self.env.data.ctrl[self.env.gripper_ctrl_id] = MAX_GRIPPER_COMMAND
-            mujoco.mj_forward(self.env.model, self.env.data)
+            self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] = 0
+            mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Reset mocap body to home position.
-            tcp_pos = self.env.data.sensor("2f85/pinch_pos").data
-            self.env.data.mocap_pos[0] = tcp_pos
+            tcp_pos = self.env.unwrapped.data.sensor("2f85/pinch_pos").data
+            self.env.unwrapped.data.mocap_pos[0] = tcp_pos
 
             # z pos
-            self.z_init = self.data.sensor("block_pos").data[2]
+            self.z_init = self.env.unwrapped.data.sensor("block_pos").data[2]
             self.z_success = self.z_init + 0.2
 
             # Sample a new block position.
-            # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-            block_xy = np.array([0.5, 0.0])
-            self.env.data.jnt("block").qpos[:3] = (*block_xy, 0.02)
-            mujoco.mj_forward(self.env.model, self.env.data)
+            block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+            # block_xy = np.array([0.5, 0.0])
+            self.env.unwrapped.data.jnt("block").qpos[:3] = (*block_xy, 0.02)
+            mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Sample a new target position
             # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-            target_region_xy = np.array([0.5, 0.10])
-            self.env.model.geom("target_region").pos = (*target_region_xy, 0.005)
-            mujoco.mj_forward(self.env.model, self.env.data)
+            # target_region_xy = np.array([0.5, 0.10])
+            # self.env.unwrapped.model.geom("target_region").pos = (*target_region_xy, 0.005)
+            # mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
             log_say("Reset the environment done.", play_sounds=True)
@@ -802,7 +802,7 @@ class GripperPenaltyWrapper(gym.RewardWrapper):
         self.last_gripper_state = None
 
     def reward(self, reward, action):
-        gripper_state_normalized = self.last_gripper_state
+        gripper_state_normalized = self.last_gripper_state / MAX_GRIPPER_COMMAND
 
         if isinstance(action, tuple):
             action = action[0]
@@ -817,7 +817,7 @@ class GripperPenaltyWrapper(gym.RewardWrapper):
 
     def step(self, action):
         # self.last_gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
-        self.last_gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / MAX_GRIPPER_COMMAND
+        self.last_gripper_state = self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id]
         obs, reward, terminated, truncated, info = self.env.step(action)
         reward = self.reward(reward, action)
         return obs, reward, terminated, truncated, info
@@ -847,7 +847,7 @@ class GripperQuantizationWrapper(gym.ActionWrapper):
             gripper_command = 0.0
 
         # gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
-        gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id]
+        gripper_state = self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id]
         gripper_action = np.clip(gripper_state + gripper_command, 0, MAX_GRIPPER_COMMAND)
         action[-1] = gripper_action.item()
         return action, is_intervention
@@ -864,7 +864,7 @@ class SimRewardWrapper(gym.Wrapper):
 
     def compute_reward(self) -> float:
         if self.reward_type == "dense":
-            block_pos = self.data.sensor("block_pos").data
+            block_pos = self.env.unwrapped.data.sensor("block_pos").data
             tcp_pos = self.data.sensor("2f85/pinch_pos").data
             dist = np.linalg.norm(block_pos - tcp_pos)
             r_close = np.exp(-20 * dist)
@@ -942,7 +942,7 @@ class EEActionWrapper(gym.ActionWrapper):
         # current_joint_pos = self.unwrapped.robot.follower_arms["main"].read("Present_Position")
         # current_ee_pos = self.fk_function(current_joint_pos)
         # Set the mocap position.
-        current_ee_pos = self.env.data.mocap_pos[0].copy()
+        current_ee_pos = self.env.unwrapped.data.mocap_pos[0].copy()
 
         if isinstance(action, torch.Tensor):
             action = action.cpu().numpy()
@@ -957,30 +957,30 @@ class EEActionWrapper(gym.ActionWrapper):
         #     position_only=True,
         #     fk_func=self.fk_function,
         # )
-        npos = np.clip(current_ee_pos + action * self.env.delta, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
-        self.env.data.mocap_pos[0] = npos
+        npos = np.clip(current_ee_pos + action, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
+        self.env.unwrapped.data.mocap_pos[0] = npos
 
-        for _ in range(49):
+        for _ in range(49): # TODO (lilkm) this is hard coded, bad code practice. 50 = 0.1/0.02 control_dt/physics_ds control_dt = 1 / fps
             target_joint_pos = opspace(
-                model=self.env.model,
-                data=self.env.data,
-                site_id=self.env.model.site("pinch").id,
+                model=self.env.unwrapped.model,
+                data=self.env.unwrapped.data,
+                site_id=self.env.unwrapped.model.site("pinch").id,
                 dof_ids=self.env.panda_dof_ids,
-                pos=self.env.data.mocap_pos[0],
-                ori=self.env.data.mocap_quat[0],
+                pos=self.env.unwrapped.data.mocap_pos[0],
+                ori=self.env.unwrapped.data.mocap_quat[0],
                 joint=_PANDA_HOME,
                 gravity_comp=True,
             )
-            self.env.data.ctrl[self.env.panda_ctrl_ids] = target_joint_pos
-            mujoco.mj_step(self.env.model, self.env.data)
+            self.env.unwrapped.data.ctrl[self.env.unwrapped.panda_ctrl_ids] = target_joint_pos
+            mujoco.mj_step(self.env.unwrapped.model, self.env.unwrapped.data)
 
         target_joint_pos = opspace(
-            model=self.env.model,
-            data=self.env.data,
-            site_id=self.env.model.site("pinch").id,
+            model=self.env.unwrapped.model,
+            data=self.env.unwrapped.data,
+            site_id=self.env.unwrapped.model.site("pinch").id,
             dof_ids=self.env.panda_dof_ids,
-            pos=self.env.data.mocap_pos[0],
-            ori=self.env.data.mocap_quat[0],
+            pos=self.env.unwrapped.data.mocap_pos[0],
+            ori=self.env.unwrapped.data.mocap_quat[0],
             joint=_PANDA_HOME,
             gravity_comp=True,
         )
@@ -999,8 +999,8 @@ class EEActionWrapper(gym.ActionWrapper):
             # gripper_state = self.unwrapped.robot.follower_arms["main"].read("Present_Position")[-1]
             # gripper_action = np.clip(gripper_state + gripper_command, 0, MAX_GRIPPER_COMMAND)
             # target_joint_pos[-1] = gripper_action
-            gripper_state = self.env.data.ctrl[self.env.gripper_ctrl_id] / MAX_GRIPPER_COMMAND # TODO (lilkm) normalize between [0-1]
-            gripper_delta = gripper_command * 1.0
+            gripper_state = self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] / MAX_GRIPPER_COMMAND # TODO (lilkm) normalize between [0-1]
+            gripper_delta = gripper_command * 1.0 # TODO (lilkm) gripper delta action = 1
             gripper_action = np.clip(gripper_state + gripper_delta, 0.0, 1.0)
             target_joint_pos = np.concatenate([target_joint_pos, [gripper_action * MAX_GRIPPER_COMMAND]])
 
@@ -1022,7 +1022,7 @@ class EEObservationWrapper(gym.ObservationWrapper):
         )
 
     def observation(self, observation):
-        current_ee_pos = self.env.data.sensor("2f85/pinch_pos").data
+        current_ee_pos = self.env.unwrapped.data.sensor("2f85/pinch_pos").data
         observation["observation.state"] = torch.cat(
             [
                 observation["observation.state"],
@@ -1296,11 +1296,11 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
     # env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
     env = SimRewardWrapper(env=env, reward_type="sparse")
     env = TimeLimitWrapper(env=env, control_time_s=cfg.wrapper.control_time_s, fps=cfg.fps)
-    if cfg.wrapper.use_gripper:
-        # env = GripperQuantizationWrapper(
-        #     env=env, quantization_threshold=cfg.wrapper.gripper_quantization_threshold
-        # )
-        env = GripperPenaltyWrapper(env=env, penalty=cfg.wrapper.gripper_penalty)
+    # if cfg.wrapper.use_gripper:
+    #     # env = GripperQuantizationWrapper(
+    #     #     env=env, quantization_threshold=cfg.wrapper.gripper_quantization_threshold
+    #     # )
+    #     env = GripperPenaltyWrapper(env=env, penalty=cfg.wrapper.gripper_penalty)
 
     if cfg.wrapper.ee_action_space_params is not None:
         env = EEActionWrapper(
@@ -1412,7 +1412,7 @@ def record_dataset(env, policy, cfg):
         features=features,
     )
 
-    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
+    with mujoco.viewer.launch_passive(env.model, env.data, show_left_ui=False, show_right_ui=False) as viewer:
         episode_index = 0
         recorded_action = None
         while viewer.is_running():
