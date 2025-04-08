@@ -238,13 +238,13 @@
             "control_time_s": 30.0,
             "use_gripper": false,
             "fixed_reset_joint_positions": [
-                0.0,
-                -0.785,
-                0.0,
+                -0.18,
+                0.32,
+                -0.0436,
                 -2.35,
-                0.0,
-                1.57,
-                0.785
+                0.0301,
+                2.67,
+                0.537
             ],
             "reset_time_s": 2.0,
             "joint_masking_action_space": null,

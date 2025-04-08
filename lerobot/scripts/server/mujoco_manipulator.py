@@ -752,14 +752,14 @@ class ResetWrapper(gym.Wrapper):
             self.z_success = self.z_init + 0.2
 
             # Sample a new block position.
-            block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-            # block_xy = np.array([0.5, 0.0])
+            # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+            block_xy = np.array([0.5, 0.0])
             self.env.unwrapped.data.jnt("block").qpos[:3] = (*block_xy, 0.02)
             mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Sample a new target position
-            target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-            # target_region_xy = np.array([0.5, 0.10])
+            # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+            target_region_xy = np.array([0.5, 0.10])
             self.env.unwrapped.model.geom("target_region").pos = (*target_region_xy, 0.005)
             mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
