@@ -15,7 +15,7 @@
         "disable_artifact": true
     },
     "dataset": {
-        "repo_id": "lilkm/panda_pick_cube_demos",
+        "repo_id": "lilkm/panda_push_cube_demos",
         "use_imagenet_stats": false
     },
     "policy": {
@@ -170,7 +170,7 @@
         "target_entropy": null,
         "use_backup_entropy": true,
         "grad_clip_norm": 10.0,
-        "num_discrete_actions": 3,
+        "num_discrete_actions": null,
         "critic_network_kwargs": {
             "hidden_dims": [
                 256,
@@ -236,7 +236,7 @@
                 128
             ],
             "control_time_s": 30.0,
-            "use_gripper": true,
+            "use_gripper": false,
             "fixed_reset_joint_positions": [
                 0.0,
                 -0.785,
@@ -269,7 +269,7 @@
         },
         "name": "franka_sim",
         "mode": "record",
-        "repo_id": "lilkm/panda_pick_cube_demos",
+        "repo_id": "lilkm/panda_push_cube_demos",
         "dataset_root": null,
         "task": "",
         "num_episodes": 30,
