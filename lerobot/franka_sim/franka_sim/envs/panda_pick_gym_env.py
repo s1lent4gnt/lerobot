@@ -255,7 +255,9 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
             logging.info(f"Before clipping policy action: {policy_action}")
 
         joint_action = policy_action[:7]
-        gripper_action = policy_action[7]
+
+        if self.cfg.wrapper.use_gripper:
+            gripper_action = policy_action[7]
 
         if not intervention_bool:
             if self.use_delta_action_space:
@@ -265,7 +267,8 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
             else:
                 target_joint_positions = joint_action
 
-            self._data.ctrl[self.gripper_ctrl_id] = gripper_action
+            if self.cfg.wrapper.use_gripper:
+                self._data.ctrl[self.gripper_ctrl_id] = gripper_action
             self._data.ctrl[self.panda_ctrl_ids] = target_joint_positions
             mujoco.mj_step(self._model, self._data)
 
