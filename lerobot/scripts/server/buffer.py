@@ -79,7 +79,7 @@ def move_transition_to_device(transition: Transition, device: str = "cpu") -> Tr
                 transition["complementary_info"][key] = val.to(device, non_blocking=non_blocking)
             elif isinstance(val, (int, float, bool)):
                 transition["complementary_info"][key] = torch.tensor(
-                    val, device=device, non_blocking=non_blocking
+                    val, device=device
                 )
             else:
                 raise ValueError(f"Unsupported type {type(val)} for complementary_info[{key}]")
@@ -566,10 +566,10 @@ class ReplayBuffer:
                     first_action = first_action[:, action_mask]
 
             if action_delta is not None:
-                # first_action = first_action / action_delta
-                ee_actions = first_action[..., :3] / action_delta
-                gripper_action = first_action[..., 3:]
-                first_action = torch.cat([ee_actions, gripper_action], dim=-1)
+                first_action = first_action / action_delta
+                # ee_actions = first_action[..., :3] / action_delta
+                # gripper_action = first_action[..., 3:]
+                # first_action = torch.cat([ee_actions, gripper_action], dim=-1)
 
             # Get complementary info if available
             first_complementary_info = None
@@ -602,10 +602,10 @@ class ReplayBuffer:
                     action = action[:, action_mask]
 
             if action_delta is not None:
-                # action = action / action_delta
-                ee_actions = action[..., :3] / action_delta
-                gripper_action = action[..., 3:]
-                action = torch.cat([ee_actions, gripper_action], dim=-1)
+                action = action / action_delta
+                # ee_actions = action[..., :3] / action_delta
+                # gripper_action = action[..., 3:]
+                # action = torch.cat([ee_actions, gripper_action], dim=-1)
 
             replay_buffer.add(
                 state=data["state"],
