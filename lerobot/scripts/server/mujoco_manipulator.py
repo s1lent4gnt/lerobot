@@ -740,7 +740,7 @@ class ResetWrapper(gym.Wrapper):
             # Reset arm to home position.
             self.env.unwrapped.data.qpos[self.env.unwrapped.panda_dof_ids] = np.asarray(self.reset_pose)
             # Gripper
-            self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] = 0
+            self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] = MAX_GRIPPER_COMMAND
             mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Reset mocap body to home position.
@@ -758,10 +758,10 @@ class ResetWrapper(gym.Wrapper):
             mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Sample a new target position
-            # target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
+            target_region_xy = np.random.uniform(*_SAMPLING_BOUNDS)
             # target_region_xy = np.array([0.5, 0.10])
-            # self.env.unwrapped.model.geom("target_region").pos = (*target_region_xy, 0.005)
-            # mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
+            self.env.unwrapped.model.geom("target_region").pos = (*target_region_xy, 0.005)
+            mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
             log_say("Reset the environment done.", play_sounds=True)
@@ -853,48 +853,114 @@ class GripperQuantizationWrapper(gym.ActionWrapper):
         return action, is_intervention
 
 
+# class SimRewardWrapper(gym.Wrapper):
+#     """
+#     This wrapper is used to help label transitions via the sim env.
+#     """
+
+#     def __init__(self, env, reward_type):
+#         super().__init__(env)
+#         self.reward_type = reward_type
+
+#     def compute_reward(self) -> float:
+#         if self.reward_type == "dense":
+#             block_pos = self.env.unwrapped.data.sensor("block_pos").data
+#             tcp_pos = self.data.sensor("2f85/pinch_pos").data
+#             dist = np.linalg.norm(block_pos - tcp_pos)
+#             r_close = np.exp(-20 * dist)
+#             r_lift = (block_pos[2] - self.z_init) / (self._z_success - self.z_init)
+#             r_lift = np.clip(r_lift, 0.0, 1.0)
+#             rew = 0.3 * r_close + 0.7 * r_lift
+#             return rew
+#         else:
+#             block_pos = self.data.sensor("block_pos").data
+#             lift = block_pos[2] - self.z_init
+#             return float(lift > 0.2)
+
+#     def is_success(self) -> bool:
+#         block_pos = self.data.sensor("block_pos").data
+#         tcp_pos = self.data.sensor("2f85/pinch_pos").data
+#         dist = np.linalg.norm(block_pos - tcp_pos)
+#         lift = block_pos[2] - self.z_init
+#         return dist < 0.05 and lift > 0.2
+    
+#     def step(self, action):
+#         observation, reward, terminated, truncated, info = self.env.step(action)
+
+#         reward = self.compute_reward()
+
+#         # move reward to device
+#         reward = torch.tensor(reward, device=self.device)
+#         if reward == 1.0:
+#             terminated = True
+#         return observation, reward, terminated, truncated, info
+
 class SimRewardWrapper(gym.Wrapper):
     """
-    This wrapper is used to help label transitions via the sim env.
+    Reward wrapper for a pushing task with a dynamic target region.
+
+    Success is defined as:
+    - The block is inside the target region (within a radius threshold)
+    - The end-effector is far enough from the block (not touching it)
     """
 
-    def __init__(self, env, reward_type):
+    def __init__(self, env, reward_type="sparse", tolerance=0.035, ee_min_dist=0.08, device: torch.device = "cuda"):
         super().__init__(env)
+
         self.reward_type = reward_type
+        self.tolerance = tolerance
+        self.ee_min_dist = ee_min_dist
+
+        if isinstance(device, str):
+            device = torch.device(device)
+        self.device = device
+
+    def get_target_position(self) -> np.ndarray:
+        # Read target XY from the "target_region" geom in the MuJoCo model
+        target_pos = self.env.unwrapped.model.geom("target_region").pos
+        return np.array(target_pos[:2])
 
     def compute_reward(self) -> float:
+        block_pos = self.data.sensor("block_pos").data
+        block_xy = block_pos[:2]
+        target_xy = self.get_target_position()
+        dist = np.linalg.norm(block_xy - target_xy)
+
         if self.reward_type == "dense":
-            block_pos = self.env.unwrapped.data.sensor("block_pos").data
-            tcp_pos = self.data.sensor("2f85/pinch_pos").data
-            dist = np.linalg.norm(block_pos - tcp_pos)
-            r_close = np.exp(-20 * dist)
-            r_lift = (block_pos[2] - self.z_init) / (self._z_success - self.z_init)
-            r_lift = np.clip(r_lift, 0.0, 1.0)
-            rew = 0.3 * r_close + 0.7 * r_lift
-            return rew
+            return np.exp(-10 * dist)
         else:
-            block_pos = self.data.sensor("block_pos").data
-            lift = block_pos[2] - self.z_init
-            return float(lift > 0.2)
+            return float(self.is_block_in_target() and self.is_ee_far_from_block())
+
+    def is_block_in_target(self) -> bool:
+        block_pos = self.data.sensor("block_pos").data
+        block_xy = block_pos[:2]
+        target_xy = self.get_target_position()
+        dist = np.linalg.norm(block_xy - target_xy)
+        return dist < self.tolerance
+
+    def is_ee_far_from_block(self) -> bool:
+        block_pos = self.data.sensor("block_pos").data
+        ee_pos = self.data.sensor("2f85/pinch_pos").data
+        dist = np.linalg.norm(ee_pos - block_pos)
+        return dist > self.ee_min_dist
 
     def is_success(self) -> bool:
-        block_pos = self.data.sensor("block_pos").data
-        tcp_pos = self.data.sensor("2f85/pinch_pos").data
-        dist = np.linalg.norm(block_pos - tcp_pos)
-        lift = block_pos[2] - self.z_init
-        return dist < 0.05 and lift > 0.2
-    
+        return self.is_block_in_target() and self.is_ee_far_from_block()
+
     def step(self, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
 
         reward = self.compute_reward()
-
-        # move reward to device
         reward = torch.tensor(reward, device=self.device)
-        if reward == 1.0:
+
+        if self.is_success():
+            reward = torch.tensor(1.0, device=self.device)
             terminated = True
+
         return observation, reward, terminated, truncated, info
 
+    def reset(self, seed=None, options=None):
+        return self.env.reset(seed=seed, options=options)
 
 class EEActionWrapper(gym.ActionWrapper):
     def __init__(self, env, ee_action_space_params=None, use_gripper=False):
@@ -1294,13 +1360,13 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
 
     # Add reward computation and control wrappers
     # env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
-    env = SimRewardWrapper(env=env, reward_type="sparse")
+    env = SimRewardWrapper(env=env, reward_type="sparse", device=cfg.device)
     env = TimeLimitWrapper(env=env, control_time_s=cfg.wrapper.control_time_s, fps=cfg.fps)
-    # if cfg.wrapper.use_gripper:
-    #     # env = GripperQuantizationWrapper(
-    #     #     env=env, quantization_threshold=cfg.wrapper.gripper_quantization_threshold
-    #     # )
-    #     env = GripperPenaltyWrapper(env=env, penalty=cfg.wrapper.gripper_penalty)
+    if cfg.wrapper.use_gripper:
+        # env = GripperQuantizationWrapper(
+        #     env=env, quantization_threshold=cfg.wrapper.gripper_quantization_threshold
+        # )
+        env = GripperPenaltyWrapper(env=env, penalty=cfg.wrapper.gripper_penalty)
 
     if cfg.wrapper.ee_action_space_params is not None:
         env = EEActionWrapper(
