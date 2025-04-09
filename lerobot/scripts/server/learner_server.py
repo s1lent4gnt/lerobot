@@ -392,6 +392,7 @@ def add_actor_information_and_train(
             observations = batch["state"]
             next_observations = batch["next_state"]
             done = batch["done"]
+            complementary_info = batch.get("complementary_info")  # Pass complementary_info
             check_nan_in_transition(observations=observations, actions=actions, next_state=next_observations)
 
             observation_features, next_observation_features = get_observation_features(
@@ -450,6 +451,7 @@ def add_actor_information_and_train(
         observations = batch["state"]
         next_observations = batch["next_state"]
         done = batch["done"]
+        complementary_info = batch.get("complementary_info")  # Pass complementary_info
 
         check_nan_in_transition(observations=observations, actions=actions, next_state=next_observations)
 
@@ -466,6 +468,7 @@ def add_actor_information_and_train(
             "done": done,
             "observation_feature": observation_features,
             "next_observation_feature": next_observation_features,
+            "complementary_info": complementary_info,
         }
 
         # Use the forward method for critic loss (includes both main critic and grasp critic)
