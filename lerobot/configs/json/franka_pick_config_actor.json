@@ -213,7 +213,6 @@
         "wrapper": {
             "gripper_penalty": -0.02,
             "display_cameras": false,
-            "delta_action": 0.05,
             "use_relative_joint_positions": true,
             "add_joint_velocity_to_observation": true,
             "add_ee_pose_to_observation": true,

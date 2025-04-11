@@ -166,7 +166,7 @@
         "critic_target_update_weight": 0.005,
         "utd_ratio": 2,
         "state_encoder_hidden_dim": 256,
-        "latent_dim": 256,
+        "latent_dim": 64,
         "target_entropy": null,
         "use_backup_entropy": true,
         "grad_clip_norm": 10.0,
@@ -195,7 +195,7 @@
         "actor_learner_config": {
             "learner_host": "127.0.0.1",
             "learner_port": 50051,
-            "policy_parameters_push_frequency": 15
+            "policy_parameters_push_frequency": 50
         },
         "concurrency": {
             "actor": "threads",
@@ -213,7 +213,6 @@
         "wrapper": {
             "gripper_penalty": -0.02,
             "display_cameras": false,
-            "delta_action": 0.05,
             "use_relative_joint_positions": true,
             "add_joint_velocity_to_observation": true,
             "add_ee_pose_to_observation": true,
