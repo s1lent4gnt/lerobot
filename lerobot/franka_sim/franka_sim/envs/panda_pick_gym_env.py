@@ -37,7 +37,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         self,
         cfg,
         use_delta_action_space: bool = True,
-        delta: float | None = None,
+        # delta: float | None = None,
         action_scale: np.ndarray = np.asarray([0.05, 1]),
         seed: int = 0,
         control_dt: float = 0.02,
@@ -98,7 +98,7 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
 
         self.cfg = cfg
 
-        self.delta = delta
+        self.delta = 0.05
         self.use_delta_action_space = use_delta_action_space
         self.current_joint_positions = self.data.qpos[self.panda_dof_ids].astype(np.float32)
 

@@ -1361,7 +1361,7 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
 
     env = PandaPickCubeGymEnv(
         cfg=cfg,
-        delta=cfg.wrapper.delta_action,
+        # delta=cfg.wrapper.delta_action,
         use_delta_action_space=cfg.wrapper.use_relative_joint_positions,
         render_mode="human",
         image_obs=True,
