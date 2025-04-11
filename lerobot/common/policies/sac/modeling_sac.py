@@ -82,9 +82,11 @@ class SACPolicy(
         if config.shared_encoder:
             encoder_critic = SACObservationEncoder(config, self.normalize_inputs)
             encoder_actor: SACObservationEncoder = encoder_critic
+            encoder_actor.stop_gradient_post_encoders = True
         else:
             encoder_critic = SACObservationEncoder(config, self.normalize_inputs)
             encoder_actor = SACObservationEncoder(config, self.normalize_inputs)
+            encoder_actor.stop_gradient_post_encoders = True
         self.shared_encoder = config.shared_encoder
 
         # Create a list of critic heads
@@ -520,11 +522,13 @@ class SACObservationEncoder(nn.Module):
         self.config = config
         self.input_normalization = input_normalizer
         self.has_pretrained_vision_encoder = False
+        self.stop_gradient_post_encoders = False
         self.parameters_to_optimize = []
 
         self.aggregation_size: int = 0
         if any("observation.image" in key for key in config.input_features):
             self.camera_number = config.camera_number
+            self.all_image_keys = [k for k in config.input_features if k.startswith("observation.image")]
 
             if self.config.vision_encoder_name is not None:
                 self.image_enc_layers = PretrainedImageEncoder(config)
@@ -532,13 +536,40 @@ class SACObservationEncoder(nn.Module):
             else:
                 self.image_enc_layers = DefaultImageEncoder(config)
 
-            self.aggregation_size += config.latent_dim * self.camera_number
-
             if config.freeze_vision_encoder:
-                freeze_image_encoder(self.image_enc_layers)
+                freeze_weights(self.image_enc_layers)
             else:
                 self.parameters_to_optimize += list(self.image_enc_layers.parameters())
-            self.all_image_keys = [k for k in config.input_features if k.startswith("observation.image")]
+
+            # Separate components for each image stream
+            self.spatial_embeddings = nn.ModuleDict()
+            self.post_encoders = nn.ModuleDict()
+
+            for key in self.all_image_keys:
+                safe_key = key.replace(".", "_")
+                # Separate spatial embedding per image
+                self.spatial_embeddings[safe_key] = SpatialLearnedEmbeddings(
+                    height=4, width=4,
+                    channel=512,
+                    num_features=8
+                )
+                # Separate post-encoder per image
+                self.post_encoders[safe_key] = nn.Sequential(
+                    nn.Dropout(0.1),
+                    nn.Linear(512 * 8, 256),
+                    nn.LayerNorm(256),
+                    nn.Tanh()
+                )
+
+            if not self.stop_gradient_post_encoders:
+                # Track parameters (all separate components)
+                self.parameters_to_optimize.extend(list(self.spatial_embeddings.parameters()))
+                self.parameters_to_optimize.extend(list(self.post_encoders.parameters()))
+            else:
+                freeze_weights(self.spatial_embeddings)
+                freeze_weights(self.post_encoders)
+
+            self.aggregation_size += config.latent_dim * self.camera_number
 
         if "observation.state" in config.input_features:
             self.state_enc_layers = nn.Sequential(
@@ -599,12 +630,21 @@ class SACObservationEncoder(nn.Module):
         if normalize:
             batch = self.input_normalization(batch)
         if len(self.all_image_keys) > 0:
-            # Batch all images along the batch dimension, then encode them.
-            images_batched = torch.cat([batch[key] for key in self.all_image_keys], dim=0)
-            images_batched = self.image_enc_layers(images_batched)
-            embeddings_chunks = torch.chunk(images_batched, dim=0, chunks=len(self.all_image_keys))
-            embeddings_image = torch.cat(embeddings_chunks, dim=-1)
-            return embeddings_image
+            features = []
+            for key in self.all_image_keys:
+                safe_key = key.replace(".", "_")
+                x = batch[key]  # [B, C, H, W]
+
+                # Shared base encoder
+                x = self.image_enc_layers(x)  # Output shape depends on encoder
+                
+                # Image-specific processing
+                x = self.spatial_embeddings[safe_key](x)
+                x = self.post_encoders[safe_key](x)  # [B, latent_dim]
+
+                features.append(x)
+
+            return torch.cat(features, dim=-1)  # [B, latent_dim * num_cameras]
         return None
 
     @property
@@ -981,6 +1021,59 @@ class DefaultImageEncoder(nn.Module):
         return self.image_enc_layers(x)
 
 
+class SpatialLearnedEmbeddings(nn.Module):
+    def __init__(self, height, width, channel, num_features=8):
+        """
+        PyTorch implementation of learned spatial embeddings
+        
+        Args:
+            height: Spatial height of input features
+            width: Spatial width of input features
+            channel: Number of input channels
+            num_features: Number of output embedding dimensions
+        """
+        super().__init__()
+        self.height = height
+        self.width = width
+        self.channel = channel
+        self.num_features = num_features
+
+        self.kernel = nn.Parameter(torch.empty(channel, height, width, num_features))
+        
+        nn.init.kaiming_normal_(self.kernel, mode='fan_in', nonlinearity='linear')
+
+    def forward(self, features):
+        """
+        Forward pass for spatial embedding
+        
+        Args:
+            features: Input tensor of shape [B, H, W, C] or [H, W, C] if no batch
+        Returns:
+            Output tensor of shape [B, C*F] or [C*F] if no batch
+        """
+
+        # features = features.last_hidden_state
+
+        original_shape = features.shape
+        if features.dim() == 3:
+            features = features.unsqueeze(0)  # Add batch dim
+
+        features_expanded = features.unsqueeze(-1)  # [B, H, W, C, 1]
+        kernel_expanded = self.kernel.unsqueeze(0)  # [1, H, W, C, F]
+
+        # Element-wise multiplication and spatial reduction
+        output = (features_expanded * kernel_expanded).sum(dim=(2, 3))  # Sum H,W
+        
+        # Reshape to combine channel and feature dimensions
+        output = output.view(output.size(0), -1)  # [B, C*F]
+
+        # Remove batch dim
+        if len(original_shape) == 3:
+            output = output.squeeze(0)
+
+        return output
+
+
 class PretrainedImageEncoder(nn.Module):
     def __init__(self, config: SACConfig):
         super().__init__()
@@ -1010,14 +1103,14 @@ class PretrainedImageEncoder(nn.Module):
     def forward(self, x):
         # TODO: (maractingi, azouitine) check the forward pass of the pretrained model
         # doesn't reach the classifier layer because we don't need it
-        enc_feat = self.image_enc_layers(x).pooler_output
-        enc_feat = self.image_enc_proj(enc_feat.view(enc_feat.shape[0], -1))
+        enc_feat = self.image_enc_layers(x).last_hidden_state
+        # enc_feat = self.image_enc_proj(enc_feat.view(enc_feat.shape[0], -1))
         return enc_feat
 
 
-def freeze_image_encoder(image_encoder: nn.Module):
+def freeze_weights(weights: nn.Module):
     """Freeze all parameters in the encoder"""
-    for param in image_encoder.parameters():
+    for param in weights.parameters():
         param.requires_grad = False
 
 
