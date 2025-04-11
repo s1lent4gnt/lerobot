@@ -92,7 +92,7 @@ class SACPolicy(
         # Create a list of critic heads
         critic_heads = [
             CriticHead(
-                input_dim=encoder_critic.output_dim + continuous_action_dim,
+                input_dim=576 + continuous_action_dim,
                 **asdict(config.critic_network_kwargs),
             )
             for _ in range(config.num_critics)
@@ -107,7 +107,7 @@ class SACPolicy(
         # Create target critic heads as deepcopies of the original critic heads
         target_critic_heads = [
             CriticHead(
-                input_dim=encoder_critic.output_dim + continuous_action_dim,
+                input_dim=576 + continuous_action_dim,
                 **asdict(config.critic_network_kwargs),
             )
             for _ in range(config.num_critics)
@@ -131,7 +131,7 @@ class SACPolicy(
             # Create grasp critic
             self.grasp_critic = GraspCritic(
                 encoder=encoder_critic,
-                input_dim=encoder_critic.output_dim,
+                input_dim=576,
                 output_dim=config.num_discrete_actions,
                 **asdict(config.grasp_critic_network_kwargs),
             )
@@ -139,7 +139,7 @@ class SACPolicy(
             # Create target grasp critic
             self.grasp_critic_target = GraspCritic(
                 encoder=encoder_critic,
-                input_dim=encoder_critic.output_dim,
+                input_dim=576,
                 output_dim=config.num_discrete_actions,
                 **asdict(config.grasp_critic_network_kwargs),
             )
@@ -151,7 +151,7 @@ class SACPolicy(
 
         self.actor = Policy(
             encoder=encoder_actor,
-            network=MLP(input_dim=encoder_actor.output_dim, **asdict(config.actor_network_kwargs)),
+            network=MLP(input_dim=576, **asdict(config.actor_network_kwargs)),
             action_dim=continuous_action_dim,
             encoder_is_shared=config.shared_encoder,
             **asdict(config.policy_kwargs),
@@ -525,7 +525,7 @@ class SACObservationEncoder(nn.Module):
         self.stop_gradient_post_encoders = False
         self.parameters_to_optimize = []
 
-        self.aggregation_size: int = 0
+        # self.aggregation_size: int = 0
         if any("observation.image" in key for key in config.input_features):
             self.camera_number = config.camera_number
             self.all_image_keys = [k for k in config.input_features if k.startswith("observation.image")]
@@ -569,7 +569,7 @@ class SACObservationEncoder(nn.Module):
                 freeze_weights(self.spatial_embeddings)
                 freeze_weights(self.post_encoders)
 
-            self.aggregation_size += config.latent_dim * self.camera_number
+            # self.aggregation_size += config.latent_dim * self.camera_number
 
         if "observation.state" in config.input_features:
             self.state_enc_layers = nn.Sequential(
@@ -580,7 +580,7 @@ class SACObservationEncoder(nn.Module):
                 nn.LayerNorm(normalized_shape=config.latent_dim),
                 nn.Tanh(),
             )
-            self.aggregation_size += config.latent_dim
+            # self.aggregation_size += config.latent_dim
 
             self.parameters_to_optimize += list(self.state_enc_layers.parameters())
 
@@ -593,11 +593,11 @@ class SACObservationEncoder(nn.Module):
                 nn.LayerNorm(normalized_shape=config.latent_dim),
                 nn.Tanh(),
             )
-            self.aggregation_size += config.latent_dim
+            # self.aggregation_size += config.latent_dim
             self.parameters_to_optimize += list(self.env_state_enc_layers.parameters())
 
-        self.aggregation_layer = nn.Linear(in_features=self.aggregation_size, out_features=config.latent_dim)
-        self.parameters_to_optimize += list(self.aggregation_layer.parameters())
+        # self.aggregation_layer = nn.Linear(in_features=self.aggregation_size, out_features=config.latent_dim)
+        # self.parameters_to_optimize += list(self.aggregation_layer.parameters())
 
     def forward(
         self, obs_dict: dict[str, Tensor], vision_encoder_cache: torch.Tensor | None = None
@@ -621,7 +621,7 @@ class SACObservationEncoder(nn.Module):
             feat.append(self.state_enc_layers(obs_dict["observation.state"]))
 
         features = torch.cat(tensors=feat, dim=-1)
-        features = self.aggregation_layer(features)
+        # features = self.aggregation_layer(features)
 
         return features
 
