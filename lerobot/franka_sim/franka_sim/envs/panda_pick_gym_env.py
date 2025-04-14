@@ -262,7 +262,8 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         if not intervention_bool:
             if self.use_delta_action_space:
                 target_joint_positions = (
-                    self.current_joint_positions + self.delta * joint_action
+                    # self.current_joint_positions + self.delta * joint_action
+                    self.current_joint_positions + joint_action
                 )
             else:
                 target_joint_positions = joint_action
