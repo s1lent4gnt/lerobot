@@ -237,6 +237,7 @@ def act_with_policy(
         env_cfg=cfg.env,
     )
     assert isinstance(policy, nn.Module)
+    policy.eval()
 
     obs, info = online_env.reset()
 
