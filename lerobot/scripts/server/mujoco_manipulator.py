@@ -508,6 +508,24 @@ class TimeLimitWrapper(gym.Wrapper):
         return self.env.reset(seed=seed, options=options)
 
 
+class SpaceLimitWrapper(gym.Wrapper):
+    def __init__(self, env):
+        self.env = env
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        # Check if cube is in the limited bound
+        block_pos = self.env.data.sensor("block_pos").data
+        outside_bounds = np.any(block_pos[:2] < (_SAMPLING_BOUNDS[0] - 0.05)) or np.any(block_pos[:2] > (_SAMPLING_BOUNDS[1] + 0.05))
+        terminated = outside_bounds
+
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, seed=None, options=None):
+        return self.env.reset(seed=seed, options=options)
+
+
 class ImageCropResizeWrapper(gym.Wrapper):
     def __init__(
         self,
@@ -740,7 +758,8 @@ class ResetWrapper(gym.Wrapper):
             # Reset arm to home position.
             self.env.unwrapped.data.qpos[self.env.unwrapped.panda_dof_ids] = np.asarray(self.reset_pose)
             # Gripper
-            self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] = MAX_GRIPPER_COMMAND
+            # self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] = MAX_GRIPPER_COMMAND
+            self.env.unwrapped.data.ctrl[self.env.unwrapped.gripper_ctrl_id] = 0
             mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Reset mocap body to home position.
@@ -841,7 +860,7 @@ class GripperPenaltyWrapper(gym.Wrapper):
     def step(self, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
 
-        if (action[-1] < -0.5 and self.last_gripper_pos > 0.9) or (action[-1] > 0.5 and self.last_gripper_pos < 0.9):
+        if (action[-1] < -0.5 and self.last_gripper_pos > 0.9) or (action[-1] > 0.5 and self.last_gripper_pos < 0.1):
             info["gripper_penalty"] = self.penalty
         else:
             info["gripper_penalty"] = 0.0
@@ -1050,7 +1069,8 @@ class EEActionWrapper(gym.ActionWrapper):
         #     position_only=True,
         #     fk_func=self.fk_function,
         # )
-        npos = np.clip(current_ee_pos + action, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
+        # npos = np.clip(current_ee_pos + action, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
+        npos = np.clip(current_ee_pos + action * 0.05, self.bounds["min"], self.bounds["max"]) # TODO (lilkm): 0.1 is the step size, should be a parameter
         self.env.unwrapped.data.mocap_pos[0] = npos
 
         for _ in range(49): # TODO (lilkm) this is hard coded, bad code practice. 50 = 0.1/0.02 control_dt/physics_ds control_dt = 1 / fps
@@ -1389,6 +1409,7 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
     # env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
     env = SimRewardWrapper(env=env, reward_type="sparse", device=cfg.device)
     env = TimeLimitWrapper(env=env, control_time_s=cfg.wrapper.control_time_s, fps=cfg.fps)
+    # env = SpaceLimitWrapper(env=env)
     if cfg.wrapper.use_gripper:
         # env = GripperQuantizationWrapper(
         #     env=env, quantization_threshold=cfg.wrapper.gripper_quantization_threshold
