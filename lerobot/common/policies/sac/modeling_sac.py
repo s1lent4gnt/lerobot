@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
+from torch.distributions import MultivariateNormal, TransformedDistribution, TanhTransform, Transform
 
 from lerobot.common.policies.normalize import Normalize, Unnormalize
 from lerobot.common.policies.pretrained import PreTrainedPolicy
@@ -82,11 +83,9 @@ class SACPolicy(
         if config.shared_encoder:
             encoder_critic = SACObservationEncoder(config, self.normalize_inputs)
             encoder_actor: SACObservationEncoder = encoder_critic
-            encoder_actor.stop_gradient_post_encoders = True
         else:
             encoder_critic = SACObservationEncoder(config, self.normalize_inputs)
             encoder_actor = SACObservationEncoder(config, self.normalize_inputs)
-            encoder_actor.stop_gradient_post_encoders = True
         self.shared_encoder = config.shared_encoder
 
         # Create a list of critic heads
@@ -157,7 +156,7 @@ class SACPolicy(
             **asdict(config.policy_kwargs),
         )
         if config.target_entropy is None:
-            config.target_entropy = -np.prod(continuous_action_dim) / 2  # (-dim(A)/2)
+            config.target_entropy = -np.prod(continuous_action_dim+1) / 2  # (-dim(A)/2)
 
         # TODO (azouitine): Handle the case where the temparameter is a fixed
         # TODO (michel-aractingi): Put the log_alpha in cuda by default because otherwise
@@ -194,7 +193,7 @@ class SACPolicy(
         # We cached the encoder output to avoid recomputing it
         observations_features = None
         if self.shared_encoder:
-            observations_features = self.actor.encoder.get_image_features(batch, normalize=True)
+            observations_features = self.actor.encoder.get_base_image_features(batch, normalize=True)
 
         actions, _, _ = self.actor(batch, observations_features)
         actions = self.unnormalize_outputs({"action": actions})["action"]
@@ -561,13 +560,13 @@ class SACObservationEncoder(nn.Module):
                     nn.Tanh()
                 )
 
-            if not self.stop_gradient_post_encoders:
+            # if not self.stop_gradient_post_encoders:
                 # Track parameters (all separate components)
-                self.parameters_to_optimize.extend(list(self.spatial_embeddings.parameters()))
-                self.parameters_to_optimize.extend(list(self.post_encoders.parameters()))
-            else:
-                freeze_weights(self.spatial_embeddings)
-                freeze_weights(self.post_encoders)
+            self.parameters_to_optimize.extend(list(self.spatial_embeddings.parameters()))
+            self.parameters_to_optimize.extend(list(self.post_encoders.parameters()))
+            # else:
+                # freeze_weights(self.spatial_embeddings)
+                # freeze_weights(self.post_encoders)
 
             # self.aggregation_size += config.latent_dim * self.camera_number
 
@@ -600,7 +599,7 @@ class SACObservationEncoder(nn.Module):
         # self.parameters_to_optimize += list(self.aggregation_layer.parameters())
 
     def forward(
-        self, obs_dict: dict[str, Tensor], vision_encoder_cache: torch.Tensor | None = None
+        self, obs_dict: dict[str, Tensor], vision_encoder_cache: torch.Tensor | None = None, stop_gradient: bool = False
     ) -> Tensor:
         """Encode the image and/or state vector.
 
@@ -610,10 +609,11 @@ class SACObservationEncoder(nn.Module):
         feat = []
         obs_dict = self.input_normalization(obs_dict)
         if len(self.all_image_keys) > 0 and vision_encoder_cache is None:
-            vision_encoder_cache = self.get_image_features(obs_dict, normalize=False)
+            vision_encoder_cache = self.get_base_image_features(obs_dict, normalize=False)
 
         if vision_encoder_cache is not None:
-            feat.append(vision_encoder_cache)
+            vision_encoder_features = self.get_image_features(vision_encoder_cache, stop_gradient=stop_gradient)
+            feat.append(vision_encoder_features)
 
         if "observation.environment_state" in self.config.input_features:
             feat.append(self.env_state_enc_layers(obs_dict["observation.environment_state"]))
@@ -625,26 +625,43 @@ class SACObservationEncoder(nn.Module):
 
         return features
 
-    def get_image_features(self, batch: dict[str, Tensor], normalize: bool = True) -> torch.Tensor:
+    def get_image_features(self, batch: dict[str, Tensor], stop_gradient: bool = False) -> torch.Tensor:
         # [N*B, C, H, W]
-        if normalize:
-            batch = self.input_normalization(batch)
+        # if normalize:
+        #     batch = self.input_normalization(batch)
         if len(self.all_image_keys) > 0:
             features = []
             for key in self.all_image_keys:
                 safe_key = key.replace(".", "_")
                 x = batch[key]  # [B, C, H, W]
 
-                # Shared base encoder
-                x = self.image_enc_layers(x)  # Output shape depends on encoder
+                # # Shared base encoder
+                # x = self.image_enc_layers(x)  # Output shape depends on encoder
                 
                 # Image-specific processing
                 x = self.spatial_embeddings[safe_key](x)
                 x = self.post_encoders[safe_key](x)  # [B, latent_dim]
 
+                if stop_gradient:
+                    x = x.detach()
+
                 features.append(x)
 
             return torch.cat(features, dim=-1)  # [B, latent_dim * num_cameras]
+        return None
+    
+    def get_base_image_features(self, batch: dict[str, Tensor], normalize: bool = True) -> torch.Tensor:
+        # [N*B, C, H, W]
+        if normalize:
+            batch = self.input_normalization(batch)
+        if len(self.all_image_keys) > 0:
+            features = {}
+            for key in self.all_image_keys:
+                x = batch[key]  # [B, C, H, W]
+                # Shared base encoder
+                x = self.image_enc_layers(x)  # Output shape depends on encoder
+                features[key] = x
+            return features
         return None
 
     @property
@@ -919,13 +936,53 @@ class Policy(nn.Module):
                 orthogonal_init()(self.std_layer.weight)
             self.parameters_to_optimize += list(self.std_layer.parameters())
 
+    # def forward(
+    #     self,
+    #     observations: torch.Tensor,
+    #     observation_features: torch.Tensor | None = None,
+    # ) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     # Encode observations if encoder exists
+    #     obs_enc = self.encoder(observations, vision_encoder_cache=observation_features, stop_gradient=True)
+
+    #     # Get network outputs
+    #     outputs = self.network(obs_enc)
+    #     means = self.mean_layer(outputs)
+
+    #     # Compute standard deviations
+    #     if self.fixed_std is None:
+    #         log_std = self.std_layer(outputs)
+    #         assert not torch.isnan(log_std).any(), "[ERROR] log_std became NaN after std_layer!"
+
+    #         if self.use_tanh_squash:
+    #             log_std = torch.tanh(log_std)
+    #             log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1.0)
+    #         else:
+    #             log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+    #     else:
+    #         log_std = self.fixed_std.expand_as(means)
+
+    #     # uses tanh activation function to squash the action to be in the range of [-1, 1]
+    #     normal = torch.distributions.Normal(means, torch.exp(log_std))
+    #     x_t = normal.rsample()  # Reparameterization trick (mean + std * N(0,1))
+    #     log_probs = normal.log_prob(x_t)  # Base log probability before Tanh
+
+    #     if self.use_tanh_squash:
+    #         actions = torch.tanh(x_t)
+    #         log_probs -= torch.log((1 - actions.pow(2)) + 1e-6)  # Adjust log-probs for Tanh
+    #     else:
+    #         actions = x_t  # No Tanh; raw Gaussian sample
+
+    #     log_probs = log_probs.sum(-1)  # Sum over action dimensions
+    #     means = torch.tanh(means) if self.use_tanh_squash else means
+    #     return actions, log_probs, means
+
     def forward(
         self,
         observations: torch.Tensor,
         observation_features: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Encode observations if encoder exists
-        obs_enc = self.encoder(observations, vision_encoder_cache=observation_features)
+        obs_enc = self.encoder(observations, vision_encoder_cache=observation_features, stop_gradient=True)
 
         # Get network outputs
         outputs = self.network(obs_enc)
@@ -934,29 +991,20 @@ class Policy(nn.Module):
         # Compute standard deviations
         if self.fixed_std is None:
             log_std = self.std_layer(outputs)
-            assert not torch.isnan(log_std).any(), "[ERROR] log_std became NaN after std_layer!"
-
-            if self.use_tanh_squash:
-                log_std = torch.tanh(log_std)
-                log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1.0)
-            else:
-                log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+            std = torch.exp(log_std)  # Match JAX "exp"
+            std = torch.clamp(std, 1e-5, 10.0)  # Match JAX default clip
         else:
             log_std = self.fixed_std.expand_as(means)
 
-        # uses tanh activation function to squash the action to be in the range of [-1, 1]
-        normal = torch.distributions.Normal(means, torch.exp(log_std))
-        x_t = normal.rsample()  # Reparameterization trick (mean + std * N(0,1))
-        log_probs = normal.log_prob(x_t)  # Base log probability before Tanh
+        # Build transformed distribution
+        dist = TanhMultivariateNormalDiag(loc=means, scale_diag=std)
 
-        if self.use_tanh_squash:
-            actions = torch.tanh(x_t)
-            log_probs -= torch.log((1 - actions.pow(2)) + 1e-6)  # Adjust log-probs for Tanh
-        else:
-            actions = x_t  # No Tanh; raw Gaussian sample
+        # Sample actions (reparameterized)
+        actions = dist.rsample()
 
-        log_probs = log_probs.sum(-1)  # Sum over action dimensions
-        means = torch.tanh(means) if self.use_tanh_squash else means
+        # Compute log_probs
+        log_probs = dist.log_prob(actions)
+
         return actions, log_probs, means
 
     def get_features(self, observations: torch.Tensor) -> torch.Tensor:
@@ -965,7 +1013,7 @@ class Policy(nn.Module):
         observations = observations.to(device)
         if self.encoder is not None:
             with torch.inference_mode():
-                return self.encoder(observations)
+                return self.encoder(observations, stop_gradient=True)
         return observations
 
 
@@ -1072,6 +1120,53 @@ class SpatialLearnedEmbeddings(nn.Module):
             output = output.squeeze(0)
 
         return output
+
+
+class RescaleFromTanh(Transform):
+    def __init__(self, low, high):
+        super().__init__()
+        self.low = low
+        self.high = high
+
+    def _call(self, x):
+        # Rescale from (-1, 1) to (low, high)
+        return 0.5 * (x + 1.0) * (self.high - self.low) + self.low
+
+    def _inverse(self, y):
+        # Rescale from (low, high) back to (-1, 1)
+        return 2.0 * (y - self.low) / (self.high - self.low) - 1.0
+
+    def log_abs_det_jacobian(self, x, y):
+        # log|d(rescale)/dx| = sum(log(0.5 * (high - low)))
+        scale = 0.5 * (self.high - self.low)
+        return torch.sum(torch.log(scale), dim=-1)
+
+class TanhMultivariateNormalDiag(TransformedDistribution):
+    def __init__(self, loc, scale_diag, low=None, high=None):
+        base_dist = MultivariateNormal(loc, torch.diag_embed(scale_diag))
+
+        transforms = [TanhTransform(cache_size=1)]
+
+        if low is not None and high is not None:
+            low = torch.as_tensor(low)
+            high = torch.as_tensor(high)
+            transforms.insert(0, RescaleFromTanh(low, high))
+
+        super().__init__(base_dist, transforms)
+
+    def mode(self):
+        # Mode is mean of base distribution, passed through transforms
+        x = self.base_dist.mean
+        for transform in self.transforms:
+            x = transform(x)
+        return x
+
+    def stddev(self):
+        std = self.base_dist.stddev
+        x = std
+        for transform in self.transforms:
+            x = transform(x)
+        return x
 
 
 class PretrainedImageEncoder(nn.Module):
