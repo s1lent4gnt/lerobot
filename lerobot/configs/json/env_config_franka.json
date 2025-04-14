@@ -30,7 +30,7 @@
             128,
             128
         ],
-        "control_time_s": 30.0,
+        "control_time_s": 15.0,
         "use_gripper": true,
         "fixed_reset_joint_positions": [
             0.0,
@@ -44,9 +44,9 @@
         "reset_time_s": 2.0,
         "joint_masking_action_space": null,
         "ee_action_space_params": {
-            "x_step_size": 0.01,
-            "y_step_size": 0.01,
-            "z_step_size": 0.01,
+            "x_step_size": 0.5,
+            "y_step_size": 0.5,
+            "z_step_size": 0.5,
             "bounds": {
                 "max": [
                     0.6,

@@ -132,15 +132,15 @@
             },
             "action": {
                 "min": [
-                    -0.03,
-                    -0.03,
-                    -0.03
+                    -1.0,
+                    -1.0,
+                    -1.0
 
                 ],
                 "max": [
-                    0.03,
-                    0.03,
-                    0.03
+                    1.0,
+                    1.0,
+                    1.0
                 ]
             }
         },
@@ -152,7 +152,7 @@
         "shared_encoder": true,
         "online_steps": 1000000,
         "online_env_seed": 10000,
-        "online_buffer_capacity": 50000,
+        "online_buffer_capacity": 100000,
         "offline_buffer_capacity": 100000,
         "online_step_before_learning": 100,
         "policy_update_freq": 1,
@@ -234,7 +234,7 @@
                 128,
                 128
             ],
-            "control_time_s": 30.0,
+            "control_time_s": 15.0,
             "use_gripper": true,
             "fixed_reset_joint_positions": [
                 0.0,
@@ -248,9 +248,9 @@
             "reset_time_s": 2.0,
             "joint_masking_action_space": null,
             "ee_action_space_params": {
-                "x_step_size": 0.01,
-                "y_step_size": 0.01,
-                "z_step_size": 0.01,
+                "x_step_size": 0.5,
+                "y_step_size": 0.5,
+                "z_step_size": 0.5,
                 "bounds": {
                     "max": [
                         0.6,
