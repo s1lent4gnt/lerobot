@@ -872,6 +872,8 @@ class GraspCritic(nn.Module):
             orthogonal_init()(self.output_layer.weight)
 
         self.parameters_to_optimize = []
+        if self.encoder is not None:
+            self.parameters_to_optimize += list(self.encoder.parameters_to_optimize)
         self.parameters_to_optimize += list(self.net.parameters())
         self.parameters_to_optimize += list(self.output_layer.parameters())
 
