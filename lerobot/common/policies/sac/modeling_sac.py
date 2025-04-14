@@ -994,7 +994,7 @@ class Policy(nn.Module):
         if self.fixed_std is None:
             log_std = self.std_layer(outputs)
             std = torch.exp(log_std)  # Match JAX "exp"
-            std = torch.clamp(std, 1e-5, 10.0)  # Match JAX default clip
+            std = torch.clamp(std, 1e-5, 5.0)  # Match JAX default clip
         else:
             log_std = self.fixed_std.expand_as(means)
 
