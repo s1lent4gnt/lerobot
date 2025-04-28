@@ -205,6 +205,7 @@ class EnvWrapperConfig:
     gripper_penalty: float = 0.0
     gripper_penalty_in_reward: bool = False
     open_gripper_on_reset: bool = False
+    delta_action: float = 0.05
 
 
 @EnvConfig.register_subclass(name="gym_manipulator")
@@ -234,6 +235,49 @@ class HILSerlRobotEnvConfig(EnvConfig):
 
     def gym_kwargs(self) -> dict:
         return {}
+
+
+@EnvConfig.register_subclass("franka_sim")
+@dataclass
+class FrankaSimEnv(EnvConfig):
+    """Configuration for the Franka simulation environment."""
+    
+    task: str = "FrankaPick-v0"
+    fps: int = 30
+    episode_length: int = 100
+    render_mode: str = "rgb_array"
+    image_obs: bool = True
+    reward_type: str = "sparse"
+    use_delta_action_space: bool = True
+    delta: float = 0.05
+    wrapper: Optional[EnvWrapperConfig] = None
+    features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            "action": PolicyFeature(type=FeatureType.ACTION, shape=(8,)),
+            "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+            "observation.images.front": PolicyFeature(type=FeatureType.VISUAL, shape=(128, 128, 3)),
+            "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(128, 128, 3)),
+        }
+    )
+    features_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "action": ACTION,
+            "observation.state": OBS_ROBOT,
+            "observation.images.front": f"{OBS_IMAGES}.front",
+            "observation.images.wrist": f"{OBS_IMAGES}.wrist",
+        }
+    )
+    
+    @property
+    def gym_kwargs(self) -> dict:
+        return {
+            "use_delta_action_space": self.use_delta_action_space,
+            "delta": self.delta,
+            "render_mode": self.render_mode,
+            "image_obs": self.image_obs,
+            "reward_type": self.reward_type,
+            "time_limit": self.episode_length / self.fps,
+        }
 
 
 @EnvConfig.register_subclass("maniskill_push")

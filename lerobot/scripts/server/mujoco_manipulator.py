@@ -764,16 +764,17 @@ class ResetWrapper(gym.Wrapper):
 
             # Reset mocap body to home position.
             tcp_pos = self.env.unwrapped.data.sensor("2f85/pinch_pos").data
+            # tcp_pos = self.env.unwrapped.data.sensor("pinch_pos").data
             self.env.unwrapped.data.mocap_pos[0] = tcp_pos
 
             # z pos
-            self.z_init = self.env.unwrapped.data.sensor("block_pos").data[2]
+            self.z_init = self.env.unwrapped.data.sensor("usb_pos").data[2]
             self.z_success = self.z_init + 0.2
 
             # Sample a new block position.
             # block_xy = np.random.uniform(*_SAMPLING_BOUNDS)
-            block_xy = np.array([0.5, 0.0])
-            self.env.unwrapped.data.jnt("block").qpos[:3] = (*block_xy, 0.02)
+            block_xy = np.array([0.38, -0.02])
+            self.env.unwrapped.data.jnt("usb_joint").qpos[:3] = (*block_xy, 0.02)
             mujoco.mj_forward(self.env.unwrapped.model, self.env.unwrapped.data)
 
             # Sample a new target position
@@ -910,8 +911,8 @@ class SimRewardWrapper(gym.Wrapper):
 
     def compute_reward(self) -> float:
         if self.reward_type == "dense":
-            block_pos = self.env.unwrapped.data.sensor("block_pos").data
-            tcp_pos = self.data.sensor("2f85/pinch_pos").data
+            block_pos = self.env.unwrapped.data.sensor("usb_pos").data
+            tcp_pos = self.data.sensor("pinch_pos").data
             dist = np.linalg.norm(block_pos - tcp_pos)
             r_close = np.exp(-20 * dist)
             r_lift = (block_pos[2] - self.z_init) / (self._z_success - self.z_init)
@@ -919,13 +920,13 @@ class SimRewardWrapper(gym.Wrapper):
             rew = 0.3 * r_close + 0.7 * r_lift
             return rew
         else:
-            block_pos = self.data.sensor("block_pos").data
+            block_pos = self.data.sensor("usb_pos").data
             lift = block_pos[2] - self.z_init
             return float(lift > 0.1)
 
     def is_success(self) -> bool:
-        block_pos = self.data.sensor("block_pos").data
-        tcp_pos = self.data.sensor("2f85/pinch_pos").data
+        block_pos = self.data.sensor("usb_pos").data
+        tcp_pos = self.data.sensor("pinch_pos").data
         dist = np.linalg.norm(block_pos - tcp_pos)
         lift = block_pos[2] - self.z_init
         return dist < 0.05 and lift > 0.2
@@ -986,7 +987,7 @@ class SimRewardWrapper(gym.Wrapper):
 
 #     def is_ee_far_from_block(self) -> bool:
 #         block_pos = self.data.sensor("block_pos").data
-#         ee_pos = self.data.sensor("2f85/pinch_pos").data
+#         ee_pos = self.data.sensor("pinch_pos").data
 #         dist = np.linalg.norm(ee_pos - block_pos)
 #         return dist > self.ee_min_dist
 
@@ -1136,6 +1137,7 @@ class EEObservationWrapper(gym.ObservationWrapper):
 
     def observation(self, observation):
         current_ee_pos = self.env.unwrapped.data.sensor("2f85/pinch_pos").data
+        # current_ee_pos = self.env.unwrapped.data.sensor("pinch_pos").data
         observation["observation.state"] = torch.cat(
             [
                 observation["observation.state"],

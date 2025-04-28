@@ -58,6 +58,7 @@ available_tasks_per_env = {
     ],
     "pusht": ["PushT-v0"],
     "xarm": ["XarmLift-v0"],
+    "franka_sim": ["FrankaPick-v0", "FrankaPush-v0"],
 }
 available_envs = list(available_tasks_per_env.keys())
 
@@ -84,6 +85,10 @@ available_datasets_per_env = {
         "lerobot/xarm_lift_medium_replay_image",
         "lerobot/xarm_push_medium_image",
         "lerobot/xarm_push_medium_replay_image",
+    ],
+    "franka_sim": [
+        "lerobot/franka_sim_pick",
+        "lerobot/franka_sim_push",
     ],
 }
 
@@ -173,6 +178,7 @@ available_policies = [
     "diffusion",
     "tdmpc",
     "vqbet",
+    "sac",
 ]
 
 # lists all available robots from `lerobot/common/robot_devices/robots`
@@ -203,6 +209,7 @@ available_policies_per_env = {
     "xarm": ["tdmpc"],
     "koch_real": ["act_koch_real"],
     "aloha_real": ["act_aloha_real"],
+    "franka_sim": ["act", "sac"],
 }
 
 env_task_pairs = [(env, task) for env, tasks in available_tasks_per_env.items() for task in tasks]

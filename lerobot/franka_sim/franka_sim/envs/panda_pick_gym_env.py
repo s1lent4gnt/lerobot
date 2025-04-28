@@ -84,10 +84,11 @@ class PandaPickCubeGymEnv(MujocoGymEnv):
         )
 
         self.gripper_ctrl_id = self._model.actuator("fingers_actuator").id
+        # self.gripper_ctrl_id = self._model.actuator("actuator8").id
         self.pinch_site_id = self._model.site("pinch").id
-        self.block_z = self._model.geom("block").size[2]
+        self.block_z = self._model.site("usb_center").size[2]
 
-        self.z_init = self._data.sensor("block_pos").data[2]
+        self.z_init = self._data.sensor("usb_pos").data[2]
         self.z_success = self.z_init + 0.2
 
         self.initial_follower_position = self.data.qpos[self.panda_dof_ids].astype(np.float32)
