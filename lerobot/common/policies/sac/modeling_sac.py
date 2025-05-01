@@ -163,10 +163,8 @@ class SACPolicy(
         # it triggers "can't optimize a non-leaf Tensor"
 
         temperature_init = config.temperature_init
-        # self.log_alpha = nn.Parameter(torch.tensor([math.log(temperature_init)]))
-        self.log_alpha = nn.Parameter(torch.tensor([inv_softplus(temperature_init)]))
-        # self.temperature = self.log_alpha.exp().item()
-        self.temperature = F.softplus(self.log_alpha).item()
+        self.log_alpha = nn.Parameter(torch.tensor([math.log(temperature_init)]))
+        self.temperature = self.log_alpha.exp().item()
     
     def get_optim_params(self) -> dict:
         optim_params = {
@@ -348,8 +346,7 @@ class SACPolicy(
                 )
 
     def update_temperature(self):
-        # self.temperature = self.log_alpha.exp().item()
-        self.temperature = F.softplus(self.log_alpha).item()
+        self.temperature = self.log_alpha.exp().item()
 
     def compute_loss_critic(
         self,
@@ -489,7 +486,7 @@ class SACPolicy(
         with torch.no_grad():
             _, log_probs, _ = self.actor(observations, observation_features)
         # temperature_loss = (-self.log_alpha.exp() * (log_probs + self.config.target_entropy)).mean()
-        temperature_loss = (-F.softplus(self.log_alpha) * (log_probs + self.config.target_entropy)).mean()
+        temperature_loss = (-self.log_alpha.exp() * (log_probs + self.config.target_entropy)).mean()
         return temperature_loss
 
     def compute_loss_actor(

@@ -225,8 +225,10 @@
                     <geom mesh="link7_7" material="white" class="panda/visual"/>
                     <geom mesh="link7_c" class="panda/collision"/>
                     <body name="attachment" pos="0 0 0.107" quat="0.3826834 0 0 0.9238795">
-                      <camera name="handcam_depth" pos="0.066 0.094 0.096" fovy="42.5" xyaxes="-0.828 0.560 0.000 0.240 0.355 0.904"/>
-                      <camera name="handcam_rgb" pos="-0.059 -0.088 0.080" fovy="42.5" xyaxes="0.759 -0.651 -0.000 -0.361 -0.420 0.833"/>
+                      <camera name="handcam_depth" pos="-0.05 0 0" fovy="62" quat="0 1 -1 0"/>
+                      <camera name="handcam_rgb" pos="-0.05 0.015 0" fovy="42.5" quat="0 1 -1 0"/>
+                      <!-- <camera name="handcam_depth" pos="0.066 0.094 0.096" fovy="42.5" xyaxes="-0.828 0.560 0.000 0.240 0.355 0.904"/> -->
+                      <!-- <camera name="handcam_rgb" pos="-0.059 -0.088 0.080" fovy="42.5" xyaxes="0.759 -0.651 -0.000 -0.361 -0.420 0.833"/> -->
                       <site name="attachment_site" quat="0 0 0 1"/>
                       <body name="base_mount" quat="-1 0 0 1" childclass="2f85">
                         <geom class="2f85/visual" mesh="base_mount" material="black"/>

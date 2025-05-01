@@ -30,7 +30,7 @@
             128,
             128
         ],
-        "control_time_s": 60.0,
+        "control_time_s": 15.0,
         "use_gripper": true,
         "fixed_reset_joint_positions": [
             0.0,
@@ -44,9 +44,9 @@
         "reset_time_s": 2.0,
         "joint_masking_action_space": null,
         "ee_action_space_params": {
-            "x_step_size": 0.1,
-            "y_step_size": 0.1,
-            "z_step_size": 0.1,
+            "x_step_size": 0.5,
+            "y_step_size": 0.5,
+            "z_step_size": 0.5,
             "bounds": {
                 "max": [
                     0.6,
@@ -64,7 +64,7 @@
     },
     "name": "franka_sim",
     "mode": "record",
-    "repo_id": "lilkm/panda_pick_insert_usb",
+    "repo_id": "lilkm/panda_pick_cube_demos_simple",
     "dataset_root": null,
     "task": "",
     "num_episodes": 30,
