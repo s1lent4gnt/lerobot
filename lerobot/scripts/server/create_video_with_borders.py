@@ -58,6 +58,43 @@ def draw_rounded_rectangle(image, top_left, bottom_right, color, thickness=-1, r
     
     return image
 
+def add_speed_label(frame, speed_text, config):
+    """
+    Add the video speed label to the frame at the bottom-left corner.
+
+    Args:
+        frame: The frame to add the label to
+        speed_text: The speed text (e.g., '20x')
+        config: Configuration dictionary with font and opacity settings
+
+    Returns:
+        The frame with the speed label added
+    """
+    height, width, _ = frame.shape
+
+    # Calculate position for bottom-left corner
+    (text_width, text_height), _ = cv2.getTextSize(
+        speed_text,
+        config['font']['type'],
+        config['font']['scale'],
+        config['font']['thickness']
+    )
+    position = (30, height - 30)  # 30 pixels from bottom and left
+
+    # Add the speed label with black background
+    return add_text_with_box(
+        frame,
+        speed_text,
+        position,
+        config['font']['type'],
+        config['font']['scale'],
+        (255, 255, 255),  # White text
+        (0, 0, 0),        # Black box
+        config['font']['thickness'],
+        config['opacity']['high'],
+        config
+    )
+
 def add_text_with_box(image, text, position, font, font_scale, text_color, box_color, thickness, opacity, config=None):
     """
     Add text with a colored box background with rounded corners to an image with a specific opacity.
@@ -248,14 +285,16 @@ def add_intervention_label(frame, is_intervention, config):
 
 def main():
     # Parameters
-    frames_dir = "output_frames/try_3/video_frames"
-    labels_file = "output_frames/try_3/intervention_labels.csv"
-    output_video = "output_frames/output_video.mp4"
+    frames_dir = "outputs/output_frames/try_3/video_frames"
+    labels_file = "outputs/output_frames/try_3/intervention_labels.csv"
+    output_video = "outputs/output_frames/output_video.mp4"
     intervention_border_color = (36, 54, 212)  # Red color in BGR format for intervention
     no_intervention_border_color = (71, 196, 39)  # Green color in BGR format for no intervention
     border_thickness = 10
     fps = 100  # Frames per second for output video (10 frame = 1 second)
     real_fps = 10
+    speed_multiplier = fps / real_fps
+    speed_text = f"{int(speed_multiplier)}x"
     
     # Global configuration dictionary
     config = {
@@ -346,6 +385,12 @@ def main():
             config
         )
         
+        frame = add_speed_label(
+            frame,
+            speed_text,
+            config
+        )
+
         # Write the frame to the video
         video_writer.write(frame)
     
