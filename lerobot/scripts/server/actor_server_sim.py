@@ -262,18 +262,18 @@ def act_with_policy(
     episode_total_steps = 0
 
     with mujoco.viewer.launch_passive(online_env.model, online_env.data, show_left_ui=False, show_right_ui=False) as viewer:
-        # output_dir = os.path.join("output_frames", "video_frames")
-        # os.makedirs(output_dir, exist_ok=True)
+        output_dir = os.path.join("output_frames", "video_frames")
+        os.makedirs(output_dir, exist_ok=True)
         # frames = []
         # labels = []
-        # height = 720
-        # width = 1280
+        height = 2160
+        width = 3840
         # slowdown = 4
         # # Initialize free camera
-        # cam = mujoco.MjvCamera()
-        # mujoco.mjv_defaultCamera(cam)
+        cam = mujoco.MjvCamera()
+        mujoco.mjv_defaultCamera(cam)
         # # Initialize renderer
-        # renderer = mujoco.Renderer(online_env.model, height, width)
+        renderer = mujoco.Renderer(online_env.model, height, width)
 
         for interaction_step in range(cfg.policy.online_steps):
             start_time = time.perf_counter()
@@ -319,35 +319,35 @@ def act_with_policy(
             #     height=1.2,
             #     lookat=np.array([0.6, 0.0, 0.4])  # adjust if needed
             # )
-            # cam.lookat[:] = np.array([0.5, -0.15, 0.4])
-            # cam.azimuth = 140
-            # cam.elevation = -20.0  # fixed downward angle
-            # cam.distance = 2.0
+            cam.lookat[:] = np.array([0.5, -0.15, 0.4])
+            cam.azimuth = 140
+            cam.elevation = -20.0  # fixed downward angle
+            cam.distance = 2.0
 
-            # renderer.update_scene(online_env.data, cam)
-            # frame = renderer.render()
+            renderer.update_scene(online_env.data, cam)
+            frame = renderer.render()
 
             # frames.append(frame.copy())
 
             # # Capture intervention label
-            # label = int(info.get("is_intervention", False))
+            label = int(info.get("is_intervention", False))
             # labels.append(label)
 
             # # Count frame index
             # frame_idx = len(labels)
 
             # # Save image
-            # filename = f"frame_{frame_idx:05d}.png"
-            # cv2.imwrite(os.path.join(output_dir, filename), frame[:, :, ::-1])
+            filename = f"frame_{interaction_step:05d}.png"
+            cv2.imwrite(os.path.join(output_dir, filename), frame[:, :, ::-1])
 
-            # # Append to CSV
-            # labels_path = os.path.join("output_frames", "intervention_labels.csv")
-            # write_header = not os.path.exists(labels_path)
-            # with open(labels_path, mode='a', newline='') as f:
-            #     writer = csv.writer(f)
-            #     if write_header:
-            #         writer.writerow(["frame", "label"])
-            #     writer.writerow([filename, label])
+            # Append to CSV
+            labels_path = os.path.join("output_frames", "intervention_labels.csv")
+            write_header = not os.path.exists(labels_path)
+            with open(labels_path, mode='a', newline='') as f:
+                writer = csv.writer(f)
+                if write_header:
+                    writer.writerow(["frame", "label"])
+                writer.writerow([filename, label])
 
             sum_reward_episode += float(reward)
             # Increment total steps counter for intervention rate
