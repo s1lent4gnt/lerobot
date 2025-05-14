@@ -1,0 +1,12 @@
+{
+  "output_dir": "output/default",
+  "seed": 1000,
+  "policy": {
+    "device": "cpu"
+  },
+  "env": {
+    "fps": 10,
+    "task": "franka_sim",
+    "device": "cpu"
+  }
+}

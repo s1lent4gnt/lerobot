@@ -64,7 +64,7 @@
     },
     "name": "franka_sim",
     "mode": "record",
-    "repo_id": "lilkm/panda_pick_cube_demos_simple",
+    "repo_id": "lilkm/panda_pick_cube_demos_simple_128p",
     "dataset_root": null,
     "task": "",
     "num_episodes": 30,
