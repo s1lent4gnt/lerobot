@@ -35,7 +35,7 @@ from torch.distributions import (
     TransformedDistribution,
 )
 
-from lerobot.policies.fql.configuration_fql import FQLConfig, is_image_feature
+from lerobot.policies.acfql.configuration_acfql import ACFQLConfig, is_image_feature
 from lerobot.policies.normalize import NormalizeBuffer, UnnormalizeBuffer
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import get_device_from_parameters
@@ -43,15 +43,15 @@ from lerobot.policies.utils import get_device_from_parameters
 DISCRETE_DIMENSION_INDEX = -1  # Gripper is always the last dimension
 
 
-class FQLPolicy(
+class ACFQLPolicy(
     PreTrainedPolicy,
 ):
-    config_class = FQLConfig
-    name = "fql"
+    config_class = ACFQLConfig
+    name = "acfql"
 
     def __init__(
         self,
-        config: FQLConfig | None = None,
+        config: ACFQLConfig | None = None,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         super().__init__(config)
@@ -981,7 +981,7 @@ class FQLPolicy(
 class SACObservationEncoder(nn.Module):
     """Encode image and/or state vector observations."""
 
-    def __init__(self, config: FQLConfig, input_normalizer: nn.Module) -> None:
+    def __init__(self, config: ACFQLConfig, input_normalizer: nn.Module) -> None:
         super().__init__()
         self.config = config
         self.input_normalization = input_normalizer
@@ -1656,7 +1656,7 @@ class ActorVectorFieldPolicy(nn.Module):
 
 
 class DefaultImageEncoder(nn.Module):
-    def __init__(self, config: FQLConfig):
+    def __init__(self, config: ACFQLConfig):
         super().__init__()
         image_key = next(key for key in config.input_features if is_image_feature(key))
         self.image_enc_layers = nn.Sequential(
@@ -1769,12 +1769,12 @@ def freeze_image_encoder(image_encoder: nn.Module):
 
 
 class PretrainedImageEncoder(nn.Module):
-    def __init__(self, config: FQLConfig):
+    def __init__(self, config: ACFQLConfig):
         super().__init__()
 
         self.image_enc_layers, self.image_enc_out_shape = self._load_pretrained_vision_encoder(config)
 
-    def _load_pretrained_vision_encoder(self, config: FQLConfig):
+    def _load_pretrained_vision_encoder(self, config: ACFQLConfig):
         """Set up CNN encoder"""
         from transformers import AutoModel
 

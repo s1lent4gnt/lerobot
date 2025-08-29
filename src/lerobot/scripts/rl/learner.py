@@ -70,10 +70,10 @@ from lerobot.constants import (
 )
 from lerobot.datasets.factory import make_dataset
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.factory import make_policy
 
 # from lerobot.policies.sac.modeling_sac import SACPolicy
-from lerobot.policies.fql.modeling_fql import FQLPolicy
+from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
+from lerobot.policies.factory import make_policy
 from lerobot.robots import so100_follower  # noqa: F401
 from lerobot.scripts.rl import learner_service
 from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
@@ -314,7 +314,7 @@ def add_actor_information_and_train(
 
     logging.info("Initializing policy")
 
-    policy: FQLPolicy = make_policy(
+    policy: ACFQLPolicy = make_policy(
         cfg=cfg.policy,
         env_cfg=cfg.env,
     )
@@ -1216,7 +1216,7 @@ def initialize_offline_replay_buffer(
 
 
 def get_observation_features(
-    policy: FQLPolicy, observations: torch.Tensor, next_observations: torch.Tensor
+    policy: ACFQLPolicy, observations: torch.Tensor, next_observations: torch.Tensor
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """
     Get observation features from the policy encoder. It act as cache for the observation features.

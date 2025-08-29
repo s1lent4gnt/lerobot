@@ -98,9 +98,9 @@ class DiscretePolicyConfig:
     init_final: float | None = None
 
 
-@PreTrainedConfig.register_subclass("fql")
+@PreTrainedConfig.register_subclass("acfql")
 @dataclass
-class FQLConfig(PreTrainedConfig):
+class ACFQLConfig(PreTrainedConfig):
     """Soft Actor-Critic (SAC) configuration.
 
     SAC is an off-policy actor-critic deep RL algorithm based on the maximum entropy
