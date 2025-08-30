@@ -182,6 +182,7 @@ class ACFQLConfig(PreTrainedConfig):
 
     force_full_n_steps: bool = True
     use_terminal_for_next_state: bool = True
+    mask_truncated_td_loss: bool = False
 
     # SAC algorithm parameters
     # Discount factor for the SAC algorithm

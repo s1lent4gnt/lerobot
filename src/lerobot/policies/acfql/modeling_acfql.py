@@ -246,6 +246,7 @@ class ACFQLPolicy(
             discounts: Tensor = batch["discount_nsteps"]
             next_observations: dict[str, Tensor] = batch["next_state_nsteps"]
             done: Tensor = batch["done_nsteps"]
+            truncated: Tensor = batch["truncated_nsteps"]
             next_observation_features: Tensor = batch.get("next_observation_feature")
             mc_returns = batch["mc_returns"]
 
@@ -257,6 +258,7 @@ class ACFQLPolicy(
                 discounts=discounts,
                 next_observations=next_observations,
                 done=done,
+                truncated=truncated,
                 observation_features=observation_features,
                 next_observation_features=next_observation_features,
                 mc_returns=mc_returns,
@@ -416,6 +418,7 @@ class ACFQLPolicy(
         discounts,
         next_observations,
         done,
+        truncated,
         observation_features: Tensor | None = None,
         next_observation_features: Tensor | None = None,
         mc_returns: Tensor | None = None,
@@ -483,13 +486,17 @@ class ACFQLPolicy(
             # correctly handles terminal states by zeroing out the next_q term,
             # truncated states require special handling to avoid incorrect loss calculation.
 
-            td_loss = (
-                F.mse_loss(
-                    input=q_preds,
-                    target=td_target_duplicate,
-                    reduction="none",
-                ).mean(dim=1)
-            ).sum()
+            td_loss = F.mse_loss(
+                input=q_preds,
+                target=td_target_duplicate,
+                reduction="none",
+            )
+
+            if self.config.mask_truncated_td_loss:
+                td_loss = td_loss * (1 - truncated)
+
+            td_loss = td_loss.mean(dim=1)
+            td_loss = td_loss.sum()
         else:
             td_loss = torch.tensor(0.0, device=q_preds.device)
 
