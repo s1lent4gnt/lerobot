@@ -117,6 +117,27 @@ def test_nstep_early_termination(optimize_memory, done_at, n_steps, base_idx):
         expected_action_is_pad[0, start_idx:] = True
     assert torch.equal(batch["action_is_pad"], expected_action_is_pad)
 
+    assert batch["state"]["observation.image"].shape == (1, 3, 84, 84)
+    assert batch["state"]["observation.image"].max() == base_idx
+    assert batch["state"]["observation.state"].shape == (1, 4)
+    assert batch["state"]["observation.state"].max() == base_idx
+
+    assert batch["next_state"]["observation.image"].shape == (1, 3, 84, 84)
+    assert batch["next_state"]["observation.image"].max() == base_idx + 1
+    assert batch["next_state"]["observation.state"].shape == (1, 4)
+    assert batch["next_state"]["observation.state"].max() == base_idx + 1
+
+    if base_idx > done_at:
+        assert batch["next_state_nsteps"]["observation.image"].shape == (1, 3, 84, 84)
+        assert batch["next_state_nsteps"]["observation.image"].max() == base_idx + n_steps
+        assert batch["next_state_nsteps"]["observation.state"].shape == (1, 4)
+        assert batch["next_state_nsteps"]["observation.state"].max() == base_idx + n_steps
+    elif base_idx <= done_at:
+        assert batch["next_state_nsteps"]["observation.image"].shape == (1, 3, 84, 84)
+        assert batch["next_state_nsteps"]["observation.image"].max() == min(done_at + 1, base_idx + n_steps)
+        assert batch["next_state_nsteps"]["observation.state"].shape == (1, 4)
+        assert batch["next_state_nsteps"]["observation.state"].max() == min(done_at + 1, base_idx + n_steps)
+
 
 @pytest.mark.parametrize("optimize_memory", [False, True])
 @pytest.mark.parametrize("truncated_at", [1, 2])
@@ -141,6 +162,31 @@ def test_nstep_early_truncation(optimize_memory, truncated_at, n_steps, base_idx
         start_idx = min(truncated_at + 1 - base_idx, base_idx + n_steps)
         expected_action_is_pad[0, start_idx:] = True
     assert torch.equal(batch["action_is_pad"], expected_action_is_pad)
+
+    assert batch["state"]["observation.image"].shape == (1, 3, 84, 84)
+    assert batch["state"]["observation.image"].max() == base_idx
+    assert batch["state"]["observation.state"].shape == (1, 4)
+    assert batch["state"]["observation.state"].max() == base_idx
+
+    assert batch["next_state"]["observation.image"].shape == (1, 3, 84, 84)
+    assert batch["next_state"]["observation.image"].max() == base_idx + 1
+    assert batch["next_state"]["observation.state"].shape == (1, 4)
+    assert batch["next_state"]["observation.state"].max() == base_idx + 1
+
+    if base_idx > truncated_at:
+        assert batch["next_state_nsteps"]["observation.image"].shape == (1, 3, 84, 84)
+        assert batch["next_state_nsteps"]["observation.image"].max() == base_idx + n_steps
+        assert batch["next_state_nsteps"]["observation.state"].shape == (1, 4)
+        assert batch["next_state_nsteps"]["observation.state"].max() == base_idx + n_steps
+    elif base_idx <= truncated_at:
+        assert batch["next_state_nsteps"]["observation.image"].shape == (1, 3, 84, 84)
+        assert batch["next_state_nsteps"]["observation.image"].max() == min(
+            truncated_at + 1, base_idx + n_steps
+        )
+        assert batch["next_state_nsteps"]["observation.state"].shape == (1, 4)
+        assert batch["next_state_nsteps"]["observation.state"].max() == min(
+            truncated_at + 1, base_idx + n_steps
+        )
 
 
 @pytest.mark.parametrize("optimize_memory", [False, True])

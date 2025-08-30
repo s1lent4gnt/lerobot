@@ -422,12 +422,13 @@ class ReplayBuffer:
                 next_idx = (idx + 1) % self.capacity
                 batch_next_state[key] = self.states[key][next_idx].to(self.device)
 
-                # TODO: review this way of handling done/truncated for next_state_nsteps and add tests
                 if self.use_terminal_for_next_state:
+                    # TODO: review this way of handling done/truncated for next_state_nsteps and add tests
                     next_state_nsteps_idx = (
                         torch.where(has_done_or_truncated, idx + done_idx, idx + done_idx + 1) % self.capacity
                     )
                 else:
+                    # TODO: review and add test: next_state_nsteps_idx can be out of bounds
                     next_state_nsteps_idx = (idx + done_idx + 1) % self.capacity
 
                 batch_next_state_nsteps[key] = self.states[key][next_state_nsteps_idx].to(self.device)
