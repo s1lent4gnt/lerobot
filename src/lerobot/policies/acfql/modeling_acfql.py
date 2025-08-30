@@ -493,7 +493,7 @@ class ACFQLPolicy(
             )
 
             if self.config.mask_truncated_td_loss:
-                td_loss = td_loss * (1 - truncated)
+                td_loss = td_loss * (1 - truncated[~actions_is_pad[:, -1]])
 
             td_loss = td_loss.mean(dim=1)
             td_loss = td_loss.sum()
