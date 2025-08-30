@@ -478,6 +478,11 @@ class ACFQLPolicy(
 
         # TD loss
         if self.config.use_td_loss:
+            # TODO: The td_target computation relies on the next state, which is problematic for
+            # truncated episodes where the next state is invalid when optimized buffer is used. While the `done` flag
+            # correctly handles terminal states by zeroing out the next_q term,
+            # truncated states require special handling to avoid incorrect loss calculation.
+
             td_loss = (
                 F.mse_loss(
                     input=q_preds,
