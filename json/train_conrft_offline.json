@@ -1,0 +1,241 @@
+{
+    "output_dir": "outputs/train_conrft_offline_test",
+    "job_name": "conrft_offline_test",
+    "resume": false,
+    "seed": 1000,
+    "num_workers": 4,
+    "batch_size": 256,
+    "steps": 2,
+    "log_freq": 10,
+    "save_checkpoint": true,
+    "save_freq": 500,
+    "wandb": {
+        "enable": true,
+        "project": "conrft-offline-test",
+        "disable_artifact": true
+    },
+    "dataset": {
+        "repo_id": "lilkm/panda_pick_octo_resized",
+        "use_imagenet_stats": true
+    },
+    "policy": {
+        "type": "conrft",
+        "push_to_hub": false,
+        "n_obs_steps": 1,
+        "n_action_steps": 4,
+        "chunk_size": 10,
+        "normalization_mapping": {
+            "VISUAL": "IDENTITY",
+            "STATE": "MIN_MAX",
+            "ACTION": "MIN_MAX"
+        },
+        "input_features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [3, 256, 256]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL", 
+                "shape": [3, 128, 128]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [18]
+            }
+        },
+        "output_features": {
+            "action": {
+                "type": "ACTION",
+                "shape": [4]
+            }
+        },
+        "dataset_stats": {
+            "observation.images.front": {
+                "mean": [
+                    0.485,
+                    0.456,
+                    0.406
+                ],
+                "std": [
+                    0.229,
+                    0.224,
+                    0.225
+                ]
+            },
+            "observation.images.wrist": {
+                "mean": [
+                    0.485,
+                    0.456,
+                    0.406
+                ],
+                "std": [
+                    0.229,
+                    0.224,
+                    0.225
+                ]
+            },
+            "observation.state": {
+                "min": [
+                    -0.18890867,
+                    -0.13319267,
+                    -0.15566483,
+                    -3.04198435,
+                    -0.05300621,
+                    2.52864378,
+                    0.426834,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    0.0,
+                    0.2,
+                    -0.3,
+                    0.0
+                ],
+                "max": [
+                    0.1956124,
+                    0.5096723,
+                    0.05482981,
+                    -2.01792539,
+                    0.04425749,
+                    2.90565838,
+                    1.07170398,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    255.0,
+                    0.6,
+                    0.3,
+                    0.5
+                ]
+            },
+            "action": {
+                "min": [
+                    -1.0,
+                    -1.0,
+                    -1.0
+                ],
+                "max": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        "device": "cuda",
+        "use_amp": false,
+        "storage_device": "cpu",
+        
+        "base_vla_model_path": "lilkm/octo-small-test",
+        "freeze_base_vla": true,
+        "use_proprio": true,
+        "proprio_latent_dim": 64,
+        "state_dim": 18,
+        
+        "offline_steps": 2,
+        "online_steps": 0,
+        
+        "time_dim": 16,
+        "consistency_hidden_dim": 256,
+        "critic_hidden_dim": 256,
+        "hidden_dim": 1024,
+        "num_blocks": 3,
+        "use_layer_norm": true,
+        "clip_denoised": true,
+        
+        "bc_weight_offline": 1.0,
+        "q_weight_offline": 0.1,
+        "bc_weight_online": 0.5,
+        "q_weight_online": 1.0,
+        
+        "sigma_data": 0.5,
+        "sigma_min": 0.002,
+        "sigma_max": 80.0,
+        "rho": 7.0,
+        "num_scales": 40,
+        "snr_clip": 5.0,
+        
+        "num_critics": 2,
+        "num_subsample_critics": null,
+        "discount": 0.97,
+        "soft_target_update_rate": 0.005,
+        
+        "cql_alpha": 0.5,
+        "cql_n_actions": 10,
+        "cql_action_sample_method": "uniform",
+        "cql_clip_diff_min": -1000000.0,
+        "cql_clip_diff_max": 1000000.0,
+        "cql_temp": 1.0,
+        
+        "actor_lr": 0.0003,
+        "critic_lr": 0.0003,
+        "grad_clip_norm": 10.0,
+        
+        "online_buffer_capacity": 10000,
+        "offline_buffer_capacity": 10000,
+        "async_prefetch": false,
+        "online_step_before_learning": 100,
+        "policy_update_freq": 1,
+        "utd_ratio": 2,
+        
+        "state_encoder_hidden_dim": 256,
+        "latent_dim": 64,
+        
+        "critic_network_kwargs": {
+            "hidden_dims": [256, 256],
+            "activate_final": true,
+            "final_activation": null
+        },        
+        "actor_learner_config": {
+            "learner_host": "127.0.0.1",
+            "learner_port": 50051,
+            "policy_parameters_push_frequency": 50,
+            "queue_get_timeout": 2.0
+        },
+        "concurrency": {
+            "actor": "threads",
+            "learner": "threads"
+        }
+    },
+    "env": {
+        "type": "hil",
+        "task": "panda_pick_pink_cube",
+        "fps": 30,
+        "state_dim": 18,
+        "action_dim": 4,
+        "episode_length": 100,
+        "use_viewer": false,
+        "use_gamepad": false,
+        "features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [3, 256, 256]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL",
+                "shape": [3, 128, 128]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [18]
+            },
+            "action": {
+                "type": "ACTION",
+                "shape": [4]
+            }
+        },
+        "features_map": {
+            "observation.images.front": "observation.images.front",
+            "observation.images.wrist": "observation.images.wrist",
+            "observation.state": "observation.state",
+            "action": "action"
+        }
+    }
+}
