@@ -76,7 +76,7 @@ from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
 from lerobot.policies.factory import make_policy
 from lerobot.robots import so100_follower  # noqa: F401
 from lerobot.scripts.rl import learner_service
-from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
+from lerobot.teleoperators import gamepad, keyboard, so100_leader, so101_leader  # noqa: F401
 from lerobot.transport import services_pb2_grpc
 from lerobot.transport.utils import (
     MAX_MESSAGE_SIZE,
@@ -351,6 +351,8 @@ def add_actor_information_and_train(
     interaction_message = None
     optimization_step = resume_optimization_step if resume_optimization_step is not None else 0
     interaction_step_shift = resume_interaction_step if resume_interaction_step is not None else 0
+    logging.info(f"[LEARNER] Starting training loop at optimization step {optimization_step}")
+    logging.info(f"[LEARNER] Starting interaction loop at step {interaction_step_shift}")
 
     dataset_repo_id = None
     if cfg.dataset is not None:
@@ -361,6 +363,7 @@ def add_actor_information_and_train(
     offline_iterator = None
 
     pretrain_steps = cfg.policy.pretrain_steps
+    logging.info(f"[LEARNER] pretrain_steps {pretrain_steps}")
 
     # NOTE: THIS IS THE MAIN LOOP OF THE LEARNER
     while True:
@@ -390,6 +393,8 @@ def add_actor_information_and_train(
                 dataset_repo_id=dataset_repo_id,
                 shutdown_event=shutdown_event,
                 # chunk_size=cfg.policy.chunk_size,
+                # TODO: chunk_size > 1 if using n-step returns, maybe add a new config option
+                add_interventions_to_offline_replay_buffer=cfg.policy.chunk_size > 1,
             )
 
             # Process all available interaction messages sent by the actor server
@@ -1130,7 +1135,9 @@ def initialize_replay_buffer(
     Returns:
         ReplayBuffer: Initialized replay buffer
     """
-    if not cfg.resume:
+    # TODO: add param to choose between empty or dataset replay buffer
+    initialize_online_buffer = True
+    if not cfg.resume or initialize_online_buffer:
         return ReplayBuffer(
             capacity=cfg.policy.online_buffer_capacity,
             device=device,
@@ -1183,7 +1190,9 @@ def initialize_offline_replay_buffer(
     Returns:
         ReplayBuffer: Initialized offline replay buffer
     """
-    if not cfg.resume:
+    # TODO: add param to choose between empty or dataset replay buffer
+    initialize_offline_buffer = True
+    if not cfg.resume or initialize_offline_buffer:
         logging.info("make_dataset offline buffer")
         offline_dataset = make_dataset(cfg)
     else:
@@ -1367,6 +1376,7 @@ def process_transitions(
     device: str,
     dataset_repo_id: str | None,
     shutdown_event: any,
+    add_interventions_to_offline_replay_buffer: bool = True,
     # chunk_size: int,
 ):
     """Process all available transitions from the queue.
@@ -1437,8 +1447,10 @@ def process_transitions(
             replay_buffer.add(**transition)
 
             # Add to offline buffer if it's an intervention
-            if dataset_repo_id is not None and transition.get("complementary_info", {}).get(
-                "is_intervention"
+            if (
+                add_interventions_to_offline_replay_buffer
+                and dataset_repo_id is not None
+                and transition.get("complementary_info", {}).get("is_intervention")
             ):
                 offline_replay_buffer.add(**transition)
 

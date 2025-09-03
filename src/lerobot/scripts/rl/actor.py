@@ -67,7 +67,7 @@ from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
 from lerobot.policies.factory import make_policy
 from lerobot.robots import so100_follower  # noqa: F401
 from lerobot.scripts.rl.gym_manipulator import make_robot_env
-from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
+from lerobot.teleoperators import gamepad, keyboard, so100_leader, so101_leader  # noqa: F401
 from lerobot.transport import services_pb2, services_pb2_grpc
 from lerobot.transport.utils import (
     bytes_to_state_dict,
@@ -263,6 +263,7 @@ def act_with_policy(
 
     # get the initial policy parameters from the learner
     if cfg.policy.pretrain_steps > 0:
+        logging.info("[ACTOR] Waiting for initial policy parameters from learner")
         update_policy_parameters(
             policy=policy, parameters_queue=parameters_queue, device=device, wait_for_update=True
         )
@@ -285,7 +286,7 @@ def act_with_policy(
             logging.info("[ACTOR] Shutting down act_with_policy")
             return
 
-        if interaction_step >= cfg.policy.online_step_before_learning:
+        if interaction_step >= cfg.policy.online_step_before_learning_with_env:
             # Time policy inference and check if it meets FPS requirement
             with policy_timer:
                 action = policy.select_action(batch=obs)

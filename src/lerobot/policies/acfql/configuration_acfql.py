@@ -177,6 +177,7 @@ class ACFQLConfig(PreTrainedConfig):
     async_prefetch: bool = False
     # Number of steps before learning starts
     online_step_before_learning: int = 100
+    online_step_before_learning_with_env: int = 100
     # Frequency of policy updates
     policy_update_freq: int = 1
 

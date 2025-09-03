@@ -62,6 +62,7 @@ from lerobot.teleoperators import (
     gamepad,  # noqa: F401
     keyboard,  # noqa: F401
     make_teleoperator_from_config,
+    so100_leader,  # noqa: F401
     so101_leader,  # noqa: F401
 )
 from lerobot.teleoperators.gamepad.teleop_gamepad import GamepadTeleop
@@ -2109,6 +2110,7 @@ def record_dataset(env, policy, cfg):
             if reward == 1.0 and not success_detected:
                 success_detected = True
                 logging.info("Success detected! Collecting additional success states.")
+                logging.info(f"reward: {reward}, terminated: {terminated}, truncated: {truncated}")
 
             # Add frame to dataset - continue marking as success even during extra collection steps
             frame = {**obs_processed, **recorded_action}
