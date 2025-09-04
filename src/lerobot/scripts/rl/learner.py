@@ -474,7 +474,7 @@ def add_actor_information_and_train(
             done_nsteps = batch["done_nsteps"]
             truncated_nsteps = batch["truncated_nsteps"]
             discount_nsteps = batch["discount_nsteps"]
-            mc_returns = batch["mc_returns"]
+            mc_returns = batch.get("mc_returns")
 
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations
@@ -558,7 +558,7 @@ def add_actor_information_and_train(
         done_nsteps = batch["done_nsteps"]
         truncated_nsteps = batch["truncated_nsteps"]
         discount_nsteps = batch["discount_nsteps"]
-        mc_returns = batch["mc_returns"]
+        mc_returns = batch.get("mc_returns")
 
         check_nan_in_transition(observations=observations, actions=actions, next_state=next_observations)
 
