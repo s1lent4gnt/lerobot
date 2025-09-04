@@ -15,7 +15,7 @@
 # limitations under the License.
 
 import functools
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from contextlib import suppress
 from typing import TypedDict
 
@@ -677,12 +677,14 @@ class ReplayBuffer:
             use_terminal_for_next_state=use_terminal_for_next_state,
         )
 
-        # Convert dataset to transitions
+        # Convert dataset to transitions generator
         list_transition = cls._lerobotdataset_to_transitions(dataset=lerobot_dataset, state_keys=state_keys)
 
+        # TODO: handle empty dataset case
+        first_transition = next(list_transition, None)
+
         # Initialize the buffer with the first transition to set up storage tensors
-        if list_transition:
-            first_transition = list_transition[0]
+        if first_transition is not None:
             first_state = {k: v.to(device) for k, v in first_transition["state"].items()}
             first_action = first_transition["action"].to(device)
 
@@ -841,7 +843,7 @@ class ReplayBuffer:
     def _lerobotdataset_to_transitions(
         dataset: LeRobotDataset,
         state_keys: Sequence[str] | None = None,
-    ) -> list[Transition]:
+    ) -> Generator[Transition]:
         """
         Convert a LeRobotDataset into a list of RL (s, a, r, s', done) transitions.
 
@@ -870,7 +872,7 @@ class ReplayBuffer:
         if state_keys is None:
             raise ValueError("State keys must be provided when converting LeRobotDataset to Transitions.")
 
-        transitions = []
+        # transitions = []
         num_frames = len(dataset)
 
         # Check if the dataset has "next.done" key
@@ -964,9 +966,10 @@ class ReplayBuffer:
                 truncated=truncated,
                 complementary_info=complementary_info,
             )
-            transitions.append(transition)
+            # transitions.append(transition)
+            yield transition
 
-        return transitions
+        # return transitions
 
 
 # Utility function to guess shapes/dtypes from a tensor
