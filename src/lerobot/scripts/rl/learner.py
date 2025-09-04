@@ -394,7 +394,7 @@ def add_actor_information_and_train(
                 shutdown_event=shutdown_event,
                 # chunk_size=cfg.policy.chunk_size,
                 # TODO: chunk_size > 1 if using n-step returns, maybe add a new config option
-                add_interventions_to_offline_replay_buffer=cfg.policy.chunk_size > 1,
+                add_interventions_to_offline_replay_buffer=cfg.policy.chunk_size == 1,
             )
 
             # Process all available interaction messages sent by the actor server
@@ -907,11 +907,13 @@ def save_training_checkpoint(
     # eg. RL training without demonstrations data
 
     if replay_buffer is not None:
+        logging.info(f"Saving replay buffer to {dataset_dir}")
         repo_id_buffer_save = cfg.env.task if dataset_repo_id is None else dataset_repo_id
         replay_buffer.to_lerobot_dataset(repo_id=repo_id_buffer_save, fps=fps, root=dataset_dir)
 
     if offline_replay_buffer is not None:
         dataset_offline_dir = os.path.join(cfg.output_dir, "dataset_offline")
+        logging.info(f"Saving offline replay buffer to {dataset_offline_dir}")
         if os.path.exists(dataset_offline_dir) and os.path.isdir(dataset_offline_dir):
             shutil.rmtree(dataset_offline_dir)
 
@@ -1135,9 +1137,7 @@ def initialize_replay_buffer(
     Returns:
         ReplayBuffer: Initialized replay buffer
     """
-    # TODO: add param to choose between empty or dataset replay buffer
-    initialize_online_buffer = True
-    if not cfg.resume or initialize_online_buffer:
+    if not cfg.resume or cfg.initialize_online_buffer:
         return ReplayBuffer(
             capacity=cfg.policy.online_buffer_capacity,
             device=device,
@@ -1190,9 +1190,7 @@ def initialize_offline_replay_buffer(
     Returns:
         ReplayBuffer: Initialized offline replay buffer
     """
-    # TODO: add param to choose between empty or dataset replay buffer
-    initialize_offline_buffer = True
-    if not cfg.resume or initialize_offline_buffer:
+    if not cfg.resume or cfg.initialize_offline_buffer:
         logging.info("make_dataset offline buffer")
         offline_dataset = make_dataset(cfg)
     else:

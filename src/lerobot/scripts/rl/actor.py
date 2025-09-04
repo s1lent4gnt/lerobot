@@ -314,6 +314,8 @@ def act_with_policy(
             episode_intervention = True
             # Increment intervention steps counter
             episode_intervention_steps += 1
+            # TODO: The policy state should be reset when an intervention occurs when chunking is enabled, to clear the action queue
+            policy.reset()  # Reset policy state if needed
 
         list_transition_to_send_to_learner.append(
             Transition(

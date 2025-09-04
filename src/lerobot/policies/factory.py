@@ -174,6 +174,7 @@ def make_policy(
     kwargs["config"] = cfg
 
     if cfg.pretrained_path:
+        logging.info(f"Loading pretrained policy from {cfg.pretrained_path}")
         # Load a pretrained policy and override the config if needed (for example, if there are inference-time
         # hyperparameters that we want to vary).
         kwargs["pretrained_name_or_path"] = cfg.pretrained_path

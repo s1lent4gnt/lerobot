@@ -1784,6 +1784,19 @@ class KeyboardControlWrapper(GamepadControlWrapper):
             rerecord_episode,
         )
 
+    def reset(self, **kwargs):
+        """
+        Reset error tracking on environment reset.
+
+        Args:
+            **kwargs: Keyword arguments passed to the wrapped environment's reset.
+
+        Returns:
+            The initial observation and info.
+        """
+        self.is_intervention_active = False
+        return super().reset(**kwargs)
+
 
 class GymHilDeviceWrapper(gym.Wrapper):
     def __init__(self, env, device="cpu"):
