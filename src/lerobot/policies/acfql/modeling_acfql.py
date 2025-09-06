@@ -100,7 +100,7 @@ class ACFQLPolicy(
 
     def reset(self):
         """This should be called whenever the environment is reset."""
-        self._action_queue = deque([], maxlen=self.config.chunk_size)
+        self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
     @torch.no_grad
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
@@ -157,7 +157,7 @@ class ACFQLPolicy(
             actions = torch.clamp(actions, -1.0, 1.0)
             actions = self.unnormalize_targets({"action": actions})["action"]
 
-            self._action_queue.extend(actions.transpose(0, 1))
+            self._action_queue.extend(actions.transpose(0, 1)[: self.config.n_action_steps])
 
         actions = self._action_queue.popleft()
 
@@ -248,7 +248,7 @@ class ACFQLPolicy(
             done: Tensor = batch["done_nsteps"]
             truncated: Tensor = batch["truncated_nsteps"]
             next_observation_features: Tensor = batch.get("next_observation_feature")
-            mc_returns = batch["mc_returns"]
+            mc_returns = batch.get("mc_returns")
 
             loss_critic, info = self.compute_loss_critic(
                 observations=observations,
