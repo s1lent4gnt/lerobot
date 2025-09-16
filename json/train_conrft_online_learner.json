@@ -1,11 +1,10 @@
 {
-    "output_dir": null,
+    "output_dir": "outputs/train_conrft_online",
     "job_name": "conrft_online_learner",
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
-    "batch_size": 256,
-    "steps": 100000,
+    "batch_size": 128,
     "log_freq": 10,
     "save_checkpoint": true,
     "save_freq": 5000,
@@ -15,7 +14,7 @@
         "disable_artifact": true
     },
     "dataset": {
-        "repo_id": "lilkm/panda_pick_octo_resized",
+        "repo_id": "lilkm/panda_pick_cube_conrft_with_action_embeddings",
         "use_imagenet_stats": true
     },
     "policy": {
@@ -134,7 +133,7 @@
         "device": "cuda",
         "use_amp": false,
         "storage_device": "cpu",
-        "base_vla_model_path": "outputs/train_conrft_offline/checkpoints/last/pretrained_model",
+        "pretrained_path": "outputs/train_conrft_offline/checkpoints/last/pretrained_model",
         "freeze_base_vla": true,
         "use_proprio": true,
         "proprio_latent_dim": 64,
