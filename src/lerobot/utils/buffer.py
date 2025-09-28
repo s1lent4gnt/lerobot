@@ -37,6 +37,19 @@ class BatchTransition(TypedDict):
     complementary_info: dict[str, torch.Tensor | float | int] | None = None
 
 
+class BatchTransitionNSteps(TypedDict):
+    state: dict[str, torch.Tensor]
+    action_seq: torch.Tensor
+    reward_seq: torch.Tensor
+    reward_nsteps: torch.Tensor
+    done_nsteps: torch.Tensor
+    next_state_nsteps: dict[str, torch.Tensor]
+    # 1-step fields
+    next_state: dict[str, torch.Tensor]
+    done: torch.Tensor
+    truncated: torch.Tensor
+    complementary_info: dict[str, torch.Tensor | float | int] | None
+
 def random_crop_vectorized(images: torch.Tensor, output_size: tuple) -> torch.Tensor:
     """
     Perform a per-image random crop over a batch of images in a vectorized way.
@@ -302,6 +315,127 @@ class ReplayBuffer:
             complementary_info=batch_complementary_info,
         )
 
+    def sample_nstep_full(
+        self,
+        batch_size: int,
+        n_steps: int,
+        gamma: float,
+    ) -> BatchTransitionNSteps:
+        """Sample a random batch of transitions and collate them into batched tensors.
+
+        Args:
+            batch_size (int): Size of batches to sample
+            n_steps (int): Number of steps for n-step returns
+            gamma (float): Discount factor
+
+        Yields:
+            BatchTransitionNSteps: Batched transitions
+        """
+        if not self.initialized:
+            raise RuntimeError("Cannot sample from an empty buffer. Add transitions first.")
+        if n_steps <= 0:
+            raise ValueError("n_steps must be >= 1.")
+
+        batch_size = min(batch_size, self.size)
+        high = max(0, self.size - 1) if self.optimize_memory and self.size < self.capacity else self.size
+
+        # Random indices for sampling - create on the same device as storage
+        idx = torch.randint(low=0, high=high, size=(batch_size,), device=self.storage_device)
+        steps = torch.arange(n_steps, device=self.storage_device).view(1, -1)
+
+        def filter_valid_starts(start_idx: torch.Tensor) -> torch.Tensor:
+            # Keep only those start_idx to ensure full n-step sequences without episode breaks
+            indices = (start_idx[:, None] + steps) % self.capacity
+            dones_seq = self.dones[indices]
+            trunc_seq = self.truncateds[indices]
+            terminal_flag = torch.logical_or(dones_seq, trunc_seq)
+            first_terminal = terminal_flag.int().argmax(dim=1)
+            has_terminal = terminal_flag.any(dim=1)
+            first_terminal = torch.where(has_terminal, first_terminal, torch.tensor(n_steps - 1, device=self.storage_device))
+            return start_idx[first_terminal == (n_steps - 1)]
+
+        idx = filter_valid_starts(idx)
+        while idx.numel() < batch_size:
+            refill = torch.randint(low=0, high=high, size=(batch_size - idx.numel(),), device=self.storage_device)
+            idx = torch.cat([idx, filter_valid_starts(refill)], dim=0)
+        idx = idx[:batch_size]
+
+        # Build sequences
+        indices = (idx[:, None] + steps) % self.capacity
+        last_idx = (idx + (n_steps - 1)) % self.capacity
+        next_idx = (idx + n_steps) % self.capacity
+
+        image_keys = [k for k in self.states if k.startswith("observation.image")] if self.use_drq else []
+        batch_state_nsteps = {}
+        batch_next_state_nsteps = {}
+        batch_next_state_1 = {}
+
+        for key in self.states:
+            batch_state_nsteps[key] = self.states[key][idx].to(self.device)
+            if not self.optimize_memory:
+                # Standard approach - load next_states directly
+                batch_next_state_nsteps[key] = self.next_states[key][(last_idx + 1) % self.capacity].to(self.device)
+                batch_next_state_1[key] = self.next_states[key][idx].to(self.device)
+            else:
+                # Memory-optimized approach - get next_state from the next index
+                batch_next_state_nsteps[key] = self.states[key][next_idx].to(self.device)
+                batch_next_state_1[key] = self.states[key][(idx + 1) % self.capacity].to(self.device)
+
+        # Apply image augmentation in a batched way if needed
+        if self.use_drq and image_keys:
+            # Concatenate all images from state and next_state
+            all_images = []
+            for key in image_keys:
+                all_images.append(batch_state_nsteps[key])
+                all_images.append(batch_next_state_nsteps[key])
+
+            # Optimization: Batch all images and apply augmentation once
+            all_images_tensor = torch.cat(all_images, dim=0)
+            augmented_images = self.image_augmentation_function(all_images_tensor)
+
+            for i, k in enumerate(image_keys):
+                # Calculate offsets for the current image key:
+                # For each key, we have 2*batch_size images (batch_size for states, batch_size for next_states)
+                # States start at index i*2*batch_size and take up batch_size slots
+                batch_state_nsteps[k] = augmented_images[i * 2 * batch_size : (i * 2 + 1) * batch_size]
+                # Next states start after the states at index (i*2+1)*batch_size and also take up batch_size slots
+                batch_next_state_nsteps[k] = augmented_images[(i * 2 + 1) * batch_size : (i * 2 + 2) * batch_size]
+
+        # Sample other tensors sequences
+        action_seq = self.actions[indices].to(self.device)
+        reward_seq = self.rewards[indices].to(self.device)
+
+        # n-step return (sum_i gamma**i * r_{t+i}); learner will ACFQLPolicy gamma**h for bootstrap
+        pow_sched = (gamma ** torch.arange(n_steps, device=self.device, dtype=reward_seq.dtype)).view(1, -1)
+        reward_nsteps = (reward_seq * pow_sched).sum(dim=1, keepdim=True)
+
+        done_last = self.dones[last_idx, None].to(self.device).float()
+        trunc_last = self.truncateds[last_idx, None].to(self.device).float()
+
+        batch_dones = self.dones[idx].to(self.device).float()
+        batch_truncs = self.truncateds[idx].to(self.device).float()
+
+        # Sample complementary_info if available
+        batch_complementary_info = None
+        if self.has_complementary_info:
+            batch_complementary_info = {}
+            for key in self.complementary_info_keys:
+                batch_complementary_info[key] = self.complementary_info[key][idx].to(self.device)
+
+        return BatchTransitionNSteps(
+            state=batch_state_nsteps,
+            action_seq=action_seq,
+            reward_seq=reward_seq,
+            reward_nsteps=reward_nsteps,
+            done_nsteps=done_last,
+            next_state_nsteps=batch_next_state_nsteps,
+            next_state=batch_next_state_1,
+            done=batch_dones,
+            truncated=batch_truncs,
+            complementary_info=batch_complementary_info,
+        )
+
+
     def get_iterator(
         self,
         batch_size: int,
@@ -326,6 +460,39 @@ class ReplayBuffer:
                 iterator = self._get_async_iterator(queue_size=queue_size, batch_size=batch_size)
             else:
                 iterator = self._get_naive_iterator(batch_size=batch_size, queue_size=queue_size)
+
+            # Yield all items from the iterator
+            with suppress(StopIteration):
+                yield from iterator
+
+    def get_iterator_nstep(
+        self,
+        batch_size: int,
+        n_steps: int,
+        gamma: float,
+        async_prefetch: bool = True,
+        queue_size: int = 2,
+    ):
+        """
+        Creates an infinite iterator that yields batches of transitions.
+        Will automatically restart when internal iterator is exhausted.
+
+        Args:
+            batch_size (int): Size of batches to sample
+            n_steps (int): Number of steps for n-step returns
+            gamma (float): Discount factor
+            async_prefetch (bool): Whether to use asynchronous prefetching with threads (default: True)
+            queue_size (int): Number of batches to prefetch (default: 2)
+
+        Yields:
+            BatchTransitionNSteps: Batched transitions
+        """
+        while True:  # Create an infinite loop
+            if async_prefetch:
+                # Get the standard iterator
+                iterator = self._get_async_iterator_nstep(batch_size, n_steps, gamma, queue_size)
+            else:
+                iterator = self._get_naive_iterator_nstep(batch_size, n_steps, gamma)
 
             # Yield all items from the iterator
             with suppress(StopIteration):
@@ -409,6 +576,101 @@ class ReplayBuffer:
         while queue:
             yield queue.popleft()
             enqueue(1)
+
+    def _get_naive_iterator_nstep(
+        self,
+        batch_size: int,
+        n_steps: int,
+        gamma: float,
+        queue_size: int = 2,
+    ):
+        """
+        Creates a simple non-threaded iterator that yields batches.
+
+        Args:
+            batch_size (int): Size of batches to sample
+            n_steps (int): Number of steps for n-step returns
+            gamma (float): Discount factor
+            queue_size (int): Number of initial batches to prefetch
+
+        Yields:
+            BatchTransitionNSteps: Batch transitions
+        """
+        import collections
+
+        queue = collections.deque()
+
+        def enqueue(n):
+            for _ in range(n):
+                data = self.sample_nstep_full(batch_size, n_steps, gamma)
+                queue.append(data)
+
+        enqueue(queue_size)
+        while queue:
+            yield queue.popleft()
+            enqueue(1)
+
+    def _get_async_iterator_nstep(
+        self,
+        batch_size: int,
+        n_steps: int,
+        gamma: float,
+        queue_size: int = 2,
+    ):
+        """
+        Create an iterator that continuously yields prefetched batches in a
+        background thread. The design is intentionally simple and avoids busy
+        waiting / complex state management.
+
+        Args:
+            batch_size (int): Size of batches to sample.
+            n_steps (int): Number of steps for n-step returns
+            gamma (float): Discount factor
+            queue_size (int): Maximum number of prefetched batches to keep in
+                memory.
+
+        Yields:
+            BatchTransition: A batch sampled from the replay buffer.
+        """
+        import queue
+        import threading
+
+        data_queue: queue.Queue = queue.Queue(maxsize=queue_size)
+        shutdown_event = threading.Event()
+
+        def producer() -> None:
+            """Continuously put sampled batches into the queue until shutdown."""
+            while not shutdown_event.is_set():
+                try:
+                    batch = self.sample_nstep_full(batch_size, n_steps, gamma)
+                    # The timeout ensures the thread unblocks if the queue is full
+                    # and the shutdown event gets set meanwhile.
+                    data_queue.put(batch, block=True, timeout=0.5)
+                except queue.Full:
+                    # Queue is full – loop again (will re-check shutdown_event)
+                    continue
+                except Exception:
+                    # Surface any unexpected error and terminate the producer.
+                    shutdown_event.set()
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        try:
+            while not shutdown_event.is_set():
+                try:
+                    yield data_queue.get(block=True)
+                except Exception:
+                    # If the producer already set the shutdown flag we exit.
+                    if shutdown_event.is_set():
+                        break
+        finally:
+            shutdown_event.set()
+            # Drain the queue quickly to help the thread exit if it's blocked on `put`.
+            while not data_queue.empty():
+                _ = data_queue.get_nowait()
+            # Give the producer thread a bit of time to finish.
+            producer_thread.join(timeout=1.0)
 
     @classmethod
     def from_lerobot_dataset(
