@@ -294,7 +294,7 @@ def act_with_policy(
                 # `select_action_chunk(batch=obs)` method that calls the onestep head once
                 # and returns the whole chunk.
                 if hasattr(policy, "select_action_chunk"):
-                    actions_chunk: torch.Tensor = policy.select_action_chunk(batch=obs)  # [h, A]
+                    actions_chunk: torch.Tensor = policy.select_action_chunk(observations=obs)  # [h, A]
                 else:
                     action = policy.select_action(batch=obs)
 
