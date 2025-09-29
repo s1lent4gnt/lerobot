@@ -90,7 +90,7 @@ class ACFQLConfig(PreTrainedConfig):
     hyperparameters.
     """
 
-    chunk_size: int = 10
+    chunk_size: int = 5
     n_action_steps: int = 10
 
     # Mapping of feature types to normalization modes
