@@ -302,7 +302,6 @@ def add_actor_information_and_train(
     fps = cfg.env.fps
     log_freq = cfg.log_freq
     save_freq = cfg.save_freq
-    policy_update_freq = cfg.policy.policy_update_freq
     policy_parameters_push_frequency = cfg.policy.actor_learner_config.policy_parameters_push_frequency
     saving_checkpoint = cfg.save_checkpoint
     online_steps = cfg.policy.online_steps
@@ -379,6 +378,7 @@ def add_actor_information_and_train(
                 logging.info("[LEARNER] Shutdown signal received during offline training. Exiting...")
                 return
 
+            time_for_one_optimization_step = time.time()
             batch = next(offline_iterator)
 
             # Extract n-step batch components
@@ -392,29 +392,9 @@ def add_actor_information_and_train(
                 next_state=next_observations_nsteps
             )
 
-            observation_features, next_observation_features = None, None
-
-            with torch.no_grad():
-                # 4a) Critic path
-                flat_act = batch["action_seq"].reshape(batch["action_seq"].shape[0], -1)
-                q = policy.critic_forward(
-                    observations=batch["state"],
-                    actions=flat_act,
-                    use_target=False,
-                    observation_features=observation_features,
-                )
-
-                # 4b) Next-action sampling path
-                next_actions, next_qs = policy._compute_next_actions(
-                    batch["next_state_nsteps"], next_observation_features
-                )
-
-                # 4c) Flow and one-step actors separately
-                B = batch["state"]["observation.state"].shape[0]
-                act_dim = policy.actor_onestep_flow.action_dim
-                noises = torch.randn(B, act_dim, device=device)
-                a_actor = policy.actor_onestep_flow(batch["state"], observation_features, noises)
-                a_flow = policy.compute_flow_actions(batch["state"], noises)
+            observation_features, next_observation_features = get_observation_features(
+                policy=policy, observations=observations, next_observations=next_observations_nsteps,
+            )
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
@@ -432,52 +412,21 @@ def add_actor_information_and_train(
                 # "truncated_nsteps": batch.get("truncated", torch.zeros_like(batch["done_nsteps"])),
             }
 
-            # 1. Critic optimization
-            critic_output = policy.forward(forward_batch, model="critic")
-            loss_critic = critic_output["loss_critic"]
-            optimizers["critic"].zero_grad()
-            loss_critic.backward()
-            critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters=policy.critic_ensemble.parameters(), max_norm=clip_grad_norm_value
+            total_out = policy.forward(forward_batch, model="total")
+            loss_total = total_out["loss_total"]
+
+            optimizers["all"].zero_grad()
+            loss_total.backward()
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters=[p for p in policy.parameters() if p.requires_grad],
+                max_norm=clip_grad_norm_value,
             ).item()
-            optimizers["critic"].step()
+            optimizers["all"].step()
 
-            # Initialize training info dictionary
-            training_infos = {
-                "loss_critic": loss_critic.item(),
-                "critic_grad_norm": critic_grad_norm,
-            }
+            policy.update_target_networks()  # keep EMA on critic target as before
 
-            # 2. Flow BC optimization (behavioral cloning on flow model)
-            bc_flow_output = policy.forward(forward_batch, model="actor_bc_flow")
-            loss_bc_flow = bc_flow_output["loss_actor_bc_flow"]
-            optimizers["actor_bc_flow"].zero_grad()
-            loss_bc_flow.backward()
-            bc_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters=policy.actor_bc_flow.parameters(), max_norm=clip_grad_norm_value
-            ).item()
-            optimizers["actor_bc_flow"].step()
-
-            training_infos["loss_bc_flow"] = loss_bc_flow.item()
-            training_infos["bc_flow_grad_norm"] = bc_flow_grad_norm
-
-            # 3. One-step flow actor optimization (QC-FQL: Q-guided + distillation)
-            if optimization_step % policy_update_freq == 0:
-                onestep_flow_output = policy.forward(forward_batch, model="actor_onestep_flow")
-                loss_onestep_flow = onestep_flow_output["loss_actor_onestep_flow"]
-                optimizers["actor_onestep_flow"].zero_grad()
-                loss_onestep_flow.backward()
-                onestep_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    parameters=policy.actor_onestep_flow.parameters(), max_norm=clip_grad_norm_value
-                ).item()
-                optimizers["actor_onestep_flow"].step()
-
-                # Add one-step flow info to training info
-                training_infos["loss_onestep_flow"] = loss_onestep_flow.item()
-                training_infos["onestep_flow_grad_norm"] = onestep_flow_grad_norm
-
-            # 4. Update target networks
-            policy.update_target_networks()
+            training_infos = total_out["info"]
+            training_infos["total_grad_norm"] = total_grad_norm
 
             # Push policy to actors periodically
             if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
@@ -489,6 +438,12 @@ def add_actor_information_and_train(
                 training_infos["offline_replay_buffer_size"] = len(offline_replay_buffer)
                 training_infos["Optimization step"] = optimization_step
                 training_infos["phase"] = "offline"
+
+                # Calculate and log optimization frequency
+                time_for_one_optimization_step = time.time() - time_for_one_optimization_step
+                frequency_for_one_optimization_step = 1 / (time_for_one_optimization_step + 1e-9)
+                training_infos["Optimization frequency loop [Hz]"] = frequency_for_one_optimization_step
+                logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
 
                 if wandb_logger:
                     wandb_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")
@@ -553,7 +508,7 @@ def add_actor_information_and_train(
             )
 
         time_for_one_optimization_step = time.time()
-        for _ in range(utd_ratio - 1):
+        for _ in range(utd_ratio):
             # Sample from the iterators
             batch = next(online_iterator)
 
@@ -569,29 +524,9 @@ def add_actor_information_and_train(
                 next_state=next_observations_nsteps
             )
 
-            observation_features, next_observation_features = None, None
-
-            with torch.no_grad():
-                # 4a) Critic path
-                flat_act = batch["action_seq"].reshape(batch["action_seq"].shape[0], -1)
-                q = policy.critic_forward(
-                    observations=batch["state"],
-                    actions=flat_act,
-                    use_target=False,
-                    observation_features=observation_features,
-                )
-
-                # 4b) Next-action sampling path
-                next_actions, next_qs = policy._compute_next_actions(
-                    batch["next_state_nsteps"], next_observation_features
-                )
-
-                # 4c) Flow and one-step actors separately
-                B = batch["state"]["observation.state"].shape[0]
-                act_dim = policy.actor_onestep_flow.action_dim
-                noises = torch.randn(B, act_dim, device=device)
-                a_actor = policy.actor_onestep_flow(batch["state"], observation_features, noises)
-                a_flow = policy.compute_flow_actions(batch["state"], noises)
+            observation_features, next_observation_features = get_observation_features(
+                policy=policy, observations=observations, next_observations=next_observations_nsteps,
+            )
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
@@ -609,52 +544,21 @@ def add_actor_information_and_train(
                 # "truncated_nsteps": batch.get("truncated", torch.zeros_like(batch["done_nsteps"])),
             }
 
-            # 1. Critic optimization
-            critic_output = policy.forward(forward_batch, model="critic")
-            loss_critic = critic_output["loss_critic"]
-            optimizers["critic"].zero_grad()
-            loss_critic.backward()
-            critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters=policy.critic_ensemble.parameters(), max_norm=clip_grad_norm_value
+            total_out = policy.forward(forward_batch, model="total")
+            loss_total = total_out["loss_total"]
+
+            optimizers["all"].zero_grad()
+            loss_total.backward()
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters=[p for p in policy.parameters() if p.requires_grad],
+                max_norm=clip_grad_norm_value,
             ).item()
-            optimizers["critic"].step()
+            optimizers["all"].step()
 
-            # Initialize training info dictionary
-            training_infos = {
-                "loss_critic": loss_critic.item(),
-                "critic_grad_norm": critic_grad_norm,
-            }
+            policy.update_target_networks()  # keep EMA on critic target as before
 
-            # 2. Flow BC optimization (behavioral cloning on flow model)
-            bc_flow_output = policy.forward(forward_batch, model="actor_bc_flow")
-            loss_bc_flow = bc_flow_output["loss_actor_bc_flow"]
-            optimizers["actor_bc_flow"].zero_grad()
-            loss_bc_flow.backward()
-            bc_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters=policy.actor_bc_flow.parameters(), max_norm=clip_grad_norm_value
-            ).item()
-            optimizers["actor_bc_flow"].step()
-
-            training_infos["loss_bc_flow"] = loss_bc_flow.item()
-            training_infos["bc_flow_grad_norm"] = bc_flow_grad_norm
-
-            # 3. One-step flow actor optimization (QC-FQL: Q-guided + distillation)
-            if optimization_step % policy_update_freq == 0:
-                onestep_flow_output = policy.forward(forward_batch, model="actor_onestep_flow")
-                loss_onestep_flow = onestep_flow_output["loss_actor_onestep_flow"]
-                optimizers["actor_onestep_flow"].zero_grad()
-                loss_onestep_flow.backward()
-                onestep_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    parameters=policy.actor_onestep_flow.parameters(), max_norm=clip_grad_norm_value
-                ).item()
-                optimizers["actor_onestep_flow"].step()
-
-                # Add one-step flow info to training info
-                training_infos["loss_onestep_flow"] = loss_onestep_flow.item()
-                training_infos["onestep_flow_grad_norm"] = onestep_flow_grad_norm
-
-            # 4. Update target networks
-            policy.update_target_networks()
+            training_infos = total_out["info"]
+            training_infos["total_grad_norm"] = total_grad_norm
 
         # Push policy to actors if needed
         if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
@@ -891,51 +795,32 @@ def make_optimizers_and_scheduler(cfg: TrainRLServerPipelineConfig, policy: nn.M
         - `lr_scheduler`: Currently set to `None` but can be extended to support learning rate scheduling.
 
     """
-    # params_to_skip = [
-    #     "encoder.vla.model.vlm_with_expert.vlm.",
-    #     # "encoder.vla.model.state_proj.",
-    # ]
-    optimizer_actor_bc_flow = torch.optim.Adam(params=policy.actor_bc_flow.named_parameters(),
-        # params=[
-        #     p
-        #     for n, p in policy.actor_bc_flow.named_parameters()
-        #     # if not policy.config.shared_encoder or not n.startswith("encoder")
-        #     # if not any(n.startswith(p) for p in params_to_skip)
-        # ],
-        lr=cfg.policy.actor_lr,
-    )
-    optimizer_actor_onestep_flow = torch.optim.Adam(params=policy.actor_onestep_flow.named_parameters(),
-        # params=[
-        #     p
-        #     for n, p in policy.actor_onestep_flow.named_parameters()
-        #     # if not policy.config.shared_encoder or not n.startswith("encoder")
-        #     if not any(n.startswith(p) for p in params_to_skip)
-        # ],
-        lr=cfg.policy.actor_lr,
-    )
+    # Collect trainable params for the joint optimizer.
+    # If you share encoders and want to freeze vision, keep your existing logic for freezing.
+    joint_params = []
+    # critic
+    joint_params += [
+        p
+        for n, p in policy.critic_ensemble.named_parameters()
+        if not (policy.config.shared_encoder and n.startswith("encoder"))
+    ]
+    # actor bc-flow
+    joint_params += [
+        p
+        for n, p in policy.actor_bc_flow.named_parameters()
+        if not (policy.config.shared_encoder and n.startswith("encoder"))
+    ]
+    # actor one-step
+    joint_params += [
+        p
+        for n, p in policy.actor_onestep_flow.named_parameters()
+        if not (policy.config.shared_encoder and n.startswith("encoder"))
+    ]
 
-    # optimizer_actor = torch.optim.Adam(
-    #     params=[
-    #         p
-    #         for n, p in policy.actor.named_parameters()
-    #         if not policy.config.shared_encoder or not n.startswith("encoder")
-    #     ],
-    #     lr=cfg.policy.actor_lr,
-    # )
-    optimizer_critic = torch.optim.Adam(params=policy.critic_ensemble.parameters(), lr=cfg.policy.critic_lr)
+    optimizer_all = torch.optim.Adam(joint_params, lr=cfg.policy.critic_lr)
 
-    # if cfg.policy.num_discrete_actions is not None:
-    #     optimizer_discrete_critic = torch.optim.Adam(
-    #         params=policy.discrete_critic.parameters(), lr=cfg.policy.critic_lr
-    #     )
-    # optimizer_temperature = torch.optim.Adam(params=[policy.log_alpha], lr=cfg.policy.critic_lr)
+    optimizers = {"all": optimizer_all}
     lr_scheduler = None
-    optimizers = {
-        "actor_bc_flow": optimizer_actor_bc_flow,
-        "actor_onestep_flow": optimizer_actor_onestep_flow,
-        "critic": optimizer_critic,
-        # "temperature": optimizer_temperature,
-    }
     # if cfg.policy.num_discrete_actions is not None:
     #     optimizers["discrete_critic"] = optimizer_discrete_critic
     return optimizers, lr_scheduler
