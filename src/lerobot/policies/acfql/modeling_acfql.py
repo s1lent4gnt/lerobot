@@ -38,7 +38,6 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import get_device_from_parameters
 
 
-
 class ACFQLPolicy(
     PreTrainedPolicy,
 ):
@@ -94,23 +93,15 @@ class ACFQLPolicy(
         raise NotImplementedError("SACPolicy does not support action chunking. It returns single actions!")
 
     @torch.no_grad()
-    def compute_flow_actions(self, batch: dict[str, Tensor], noises: Tensor) -> Tensor:
-        observations_features = None
-        if self.shared_encoder and self.actor_bc_flow.encoder.has_images:
-            # Cache and normalize image features
-            observations_features = self.actor_bc_flow.encoder.get_cached_image_features(
-                batch, normalize=True
-            )
-
+    def compute_flow_actions(self, observations, observations_features, noises: Tensor) -> Tensor:
         actions = noises
         flow_steps = self.config.flow_steps
-        # dt = 1.0 / flow_steps
 
         # Euler method.
         for i in range(flow_steps):
             t_val = float(i) / flow_steps
             t = torch.full((actions.shape[0], 1), t_val, device=noises.device)
-            vels = self.actor_bc_flow(batch, observations_features, actions, t)
+            vels = self.actor_bc_flow(observations, observations_features, actions, t)
             actions = actions + vels / flow_steps
 
         actions = torch.clamp(actions, -1.0, 1.0)
@@ -121,13 +112,7 @@ class ACFQLPolicy(
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Select action for inference/evaluation"""
 
-        observations_features = None
-        if self.shared_encoder and self.actor_onestep_flow.encoder.has_images:
-            # Cache and normalize image features
-            observations_features = self.actor_onestep_flow.encoder.get_cached_image_features(
-                batch, normalize=True
-            )
-
+        observations_features = batch["observation_feature"]
         # Action queue logic for n_action_steps > 1. When the action_queue is depleted, populate it by
         # querying the policy.
         if len(self._action_queue) == 0:
@@ -155,26 +140,22 @@ class ACFQLPolicy(
         return actions
 
     @torch.no_grad()
-    def select_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
+    def select_action_chunk(self, observations: dict[str, Tensor]) -> Tensor:
         """Select a full action chunk for QC-FQL open-loop execution.
 
         Returns:
             Tensor: Action chunk of shape [chunk_size, action_dim_per_step]
         """
+        observations = observations
         observations_features = None
-        if self.shared_encoder and self.actor_onestep_flow.encoder.has_images:
-            # Cache and normalize image features
-            observations_features = self.actor_onestep_flow.encoder.get_cached_image_features(
-                batch, normalize=True
-            )
 
-        batch_shape = batch["observation.state"].shape[0]
+        batch_shape = observations["observation.state"].shape[0]
         action_dim = self.actor_onestep_flow.action_dim
-        device = batch["observation.state"].device
+        device = observations["observation.state"].device
 
         # Generate actions using one-step flow actor
         noises = torch.randn(batch_shape, action_dim, device=device)
-        actions = self.actor_onestep_flow(batch, observations_features, noises)
+        actions = self.actor_onestep_flow(observations, observations_features, noises)
         actions = torch.clamp(actions, -1.0, 1.0)
 
         # Reshape actions for chunking: [batch_size, chunk_size, action_dim_per_step]
@@ -213,7 +194,7 @@ class ACFQLPolicy(
     def forward(
         self,
         batch: dict[str, Tensor | dict[str, Tensor]],
-        model: Literal["actor", "critic", "discrete_critic", "discrete_actor"] = "critic",
+        model: Literal["actor_bc_flow", "actor_onestep_flow", "critic", "total"] = "critic",
     ) -> dict[str, Tensor]:
         """Compute the loss for the given model
 
@@ -270,6 +251,23 @@ class ACFQLPolicy(
             )
             return {"loss_actor_onestep_flow": loss_actor_onestep_flow, "info": info}
 
+        if model == "total":
+            rewards: Tensor = batch["reward_nsteps"]
+            next_observations: dict[str, Tensor] = batch["next_state_nsteps"]
+            done: Tensor = batch["done_nsteps"]
+            next_observation_features: Tensor = batch.get("next_observation_feature")
+
+            loss_total, info = self.compute_total_loss(
+                observations=observations,
+                actions=actions,
+                rewards=rewards,
+                next_observations=next_observations,
+                done=done,
+                observation_features=observation_features,
+                next_observation_features=next_observation_features
+            )
+            return {"loss_total": loss_total, "info": info}
+
         raise ValueError(f"Unknown model type: {model}")
 
     def update_target_networks(self):
@@ -283,6 +281,49 @@ class ACFQLPolicy(
                 param.data * self.config.critic_target_update_weight
                 + target_param.data * (1.0 - self.config.critic_target_update_weight)
             )
+
+    def compute_total_loss(
+        self,
+        observations,
+        actions,
+        rewards,
+        next_observations,
+        done,
+        observation_features: Tensor | None = None,
+        next_observation_features: Tensor | None = None
+    ):
+        # critic
+        loss_c, info_c = self.compute_loss_critic(
+            observations=observations,
+            actions=actions,
+            rewards=rewards,
+            next_observations=next_observations,
+            done=done,
+            observation_features=observation_features,
+            next_observation_features=next_observation_features,
+        )
+
+        # actor = (BC-flow) + (one-step distill + Q)
+        loss_bc, info_bc = self.compute_loss_actor_bc_flow(
+            observations=observations,
+            observation_features=observation_features,
+            actions=actions,
+        )
+        loss_one, info_one = self.compute_loss_actor_onestep_flow(
+            observations=observations,
+            observation_features=observation_features,
+            actions=actions,
+        )
+
+        loss = loss_c + loss_bc + loss_one
+
+        info = {}
+        info.update({f"critic/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in info_c.items()})
+        info.update({f"actor_bc/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in info_bc.items()})
+        info.update({f"actor_one/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in info_one.items()})
+        info["total_loss"] = loss.item()
+
+        return loss, info
 
     def compute_loss_critic(
         self,
@@ -333,22 +374,15 @@ class ACFQLPolicy(
         # You compute the mean loss of the batch for each critic and then to compute the final loss you sum them up
 
         # TD loss
-        if self.config.use_td_loss:
-            # TODO: The td_target computation relies on the next state, which is problematic for
-            # truncated episodes where the next state is invalid when optimized buffer is used. While the `done` flag
-            # correctly handles terminal states by zeroing out the next_q term,
-            # truncated states require special handling to avoid incorrect loss calculation.
+        td_loss = F.mse_loss(
+            input=q_preds,
+            target=td_target_duplicate,
+            reduction="none",
+        )
 
-            td_loss = F.mse_loss(
-                input=q_preds,
-                target=td_target_duplicate,
-                reduction="none",
-            )
+        td_loss = td_loss.mean(dim=1)
+        td_loss = td_loss.sum()
 
-            td_loss = td_loss.mean(dim=1)
-            td_loss = td_loss.sum()
-        else:
-            td_loss = torch.tensor(0.0, device=q_preds.device)
 
         # Total critic loss
         critics_loss = td_loss
@@ -406,7 +440,7 @@ class ACFQLPolicy(
 
         # Distillation loss
         noises = torch.randn(batch_size, action_dim, device=observations["observation.state"].device)
-        target_flow_actions = self.compute_flow_actions(observations, noises)
+        target_flow_actions = self.compute_flow_actions(observations, observation_features, noises)
         actor_actions = self.actor_onestep_flow(observations, observation_features, noises)
         distill_loss = F.mse_loss(input=actor_actions, target=target_flow_actions)
 
@@ -422,10 +456,6 @@ class ACFQLPolicy(
 
         q_vals = q_preds.mean(dim=0)
         q_loss = -q_vals.mean()
-
-        # if self.config.normalize_q_loss:
-        #     lam = 1.0 / (q_preds.abs().mean().detach() + 1e-5)
-        #     q_loss = lam * q_loss
 
         # Total loss: alpha * distillation + q_loss
         actor_onestep_flow_loss = self.config.alpha * distill_loss + q_loss
