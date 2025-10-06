@@ -382,9 +382,9 @@ def add_actor_information_and_train(
             batch = next(offline_iterator)
 
             # Extract n-step batch components
-            actions = batch["action_seq"]  # [B, h, action_dim]
+            actions = batch["actions"]  # [B, h, action_dim]
             observations = batch["state"]
-            next_observations_nsteps = batch["next_state_nsteps"]
+            next_observations_nsteps = batch["next_state"]
 
             check_nan_in_transition(
                 observations=observations,
@@ -395,21 +395,20 @@ def add_actor_information_and_train(
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
+            # observation_features, next_observation_features = None, None
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
-                "action": actions,  # [B, h, action_dim] - full sequence
                 "state": observations,
-                "next_state": batch["next_state"],  # s_{t+1} for convenience
-                "done": batch["done"],
-                "truncated": batch["truncated"],
+                "action": actions,
+                "reward": batch["rewards"],
+                "terminal": batch["terminals"],
+                "mask": batch["masks"],
+                "valid": batch["valid"],
+                "next_state": batch["next_state"],
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
                 "complementary_info": batch.get("complementary_info"),
-                "reward_nsteps": batch["reward_nsteps"],
-                "next_state_nsteps": batch["next_state_nsteps"],
-                "done_nsteps": batch["done_nsteps"],
-                # "truncated_nsteps": batch.get("truncated", torch.zeros_like(batch["done_nsteps"])),
             }
 
             total_out = policy.forward(forward_batch, model="total")
@@ -418,7 +417,7 @@ def add_actor_information_and_train(
             optimizers["all"].zero_grad()
             loss_total.backward()
             total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters=[p for p in policy.parameters() if p.requires_grad],
+                parameters=policy.parameters(),
                 max_norm=clip_grad_norm_value,
             ).item()
             optimizers["all"].step()
@@ -512,11 +511,10 @@ def add_actor_information_and_train(
             # Sample from the iterators
             batch = next(online_iterator)
 
-
             # Extract n-step batch components
-            actions = batch["action_seq"]  # [B, h, action_dim]
+            actions = batch["actions"]  # [B, h, action_dim]
             observations = batch["state"]
-            next_observations_nsteps = batch["next_state_nsteps"]
+            next_observations_nsteps = batch["next_state"]
 
             check_nan_in_transition(
                 observations=observations,
@@ -527,21 +525,20 @@ def add_actor_information_and_train(
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
+            # observation_features, next_observation_features = None, None
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
-                "action": actions,  # [B, h, action_dim] - full sequence
                 "state": observations,
-                "next_state": batch["next_state"],  # s_{t+1} for convenience
-                "done": batch["done"],
-                "truncated": batch["truncated"],
+                "action": actions,
+                "reward": batch["rewards"],
+                "terminal": batch["terminals"],
+                "mask": batch["masks"],
+                "valid": batch["valid"],
+                "next_state": batch["next_state"],
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
                 "complementary_info": batch.get("complementary_info"),
-                "reward_nsteps": batch["reward_nsteps"],
-                "next_state_nsteps": batch["next_state_nsteps"],
-                "done_nsteps": batch["done_nsteps"],
-                # "truncated_nsteps": batch.get("truncated", torch.zeros_like(batch["done_nsteps"])),
             }
 
             total_out = policy.forward(forward_batch, model="total")
@@ -550,7 +547,7 @@ def add_actor_information_and_train(
             optimizers["all"].zero_grad()
             loss_total.backward()
             total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters=[p for p in policy.parameters() if p.requires_grad],
+                parameters=policy.parameters(),
                 max_norm=clip_grad_norm_value,
             ).item()
             optimizers["all"].step()

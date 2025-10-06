@@ -25,18 +25,58 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
-from torch.distributions import (
-    MultivariateNormal,
-    TanhTransform,
-    Transform,
-    TransformedDistribution,
-)
 
 from lerobot.policies.acfql.configuration_acfql import ACFQLConfig, is_image_feature
 from lerobot.policies.normalize import NormalizeBuffer, UnnormalizeBuffer
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import get_device_from_parameters
 
+import logging
+
+def check_nan_in_transition(
+    observations: torch.Tensor,
+    actions: torch.Tensor,
+    next_state: torch.Tensor,
+    raise_error: bool = False,
+) -> bool:
+    """
+    Check for NaN values in transition data.
+
+    Args:
+        observations: Dictionary of observation tensors
+        actions: Action tensor
+        next_state: Dictionary of next state tensors
+        raise_error: If True, raises ValueError when NaN is detected
+
+    Returns:
+        bool: True if NaN values were detected, False otherwise
+    """
+    nan_detected = False
+
+    # Check observations
+    for key, tensor in observations.items():
+        if torch.isnan(tensor).any():
+            logging.error(f"observations[{key}] contains NaN values")
+            nan_detected = True
+            if raise_error:
+                raise ValueError(f"NaN detected in observations[{key}]")
+
+    # Check next state
+    for key, tensor in next_state.items():
+        if torch.isnan(tensor).any():
+            logging.error(f"next_state[{key}] contains NaN values")
+            nan_detected = True
+            if raise_error:
+                raise ValueError(f"NaN detected in next_state[{key}]")
+
+    # Check actions
+    if torch.isnan(actions).any():
+        logging.error("actions contains NaN values")
+        nan_detected = True
+        if raise_error:
+            raise ValueError("NaN detected in actions")
+
+    return nan_detected
 
 class ACFQLPolicy(
     PreTrainedPolicy,
@@ -162,11 +202,6 @@ class ACFQLPolicy(
         action_dim_per_step = action_dim // self.config.chunk_size
         actions = actions.reshape(batch_shape, self.config.chunk_size, action_dim_per_step)
 
-        # Unnormalize actions
-        actions = self.unnormalize_targets({"action": actions})["action"]
-
-        # Return the chunk for the first (and typically only) batch element
-        # Shape: [chunk_size, action_dim_per_step]
         return actions[0]
 
     def critic_forward(
@@ -216,12 +251,13 @@ class ACFQLPolicy(
         actions: Tensor = batch["action"]
         observations: dict[str, Tensor] = batch["state"]
         observation_features: Tensor = batch.get("observation_feature")
+        valid: Tensor = batch["valid"]
 
         if model == "critic":
             # Extract critic-specific components
-            rewards: Tensor = batch["reward_nsteps"]
-            next_observations: dict[str, Tensor] = batch["next_state_nsteps"]
-            done: Tensor = batch["done_nsteps"]
+            rewards: Tensor = batch["reward"]
+            next_observations: dict[str, Tensor] = batch["next_state"]
+            done: Tensor = batch["mask"]
             next_observation_features: Tensor = batch.get("next_observation_feature")
 
             loss_critic, info = self.compute_loss_critic(
@@ -230,6 +266,7 @@ class ACFQLPolicy(
                 rewards=rewards,
                 next_observations=next_observations,
                 done=done,
+                valid=valid,
                 observation_features=observation_features,
                 next_observation_features=next_observation_features,
             )
@@ -241,6 +278,7 @@ class ACFQLPolicy(
                 observations=observations,
                 observation_features=observation_features,
                 actions=actions,
+                valid=valid,
             )
             return {"loss_actor_bc_flow": loss_actor_bc_flow, "info": info}
         if model == "actor_onestep_flow":
@@ -252,9 +290,10 @@ class ACFQLPolicy(
             return {"loss_actor_onestep_flow": loss_actor_onestep_flow, "info": info}
 
         if model == "total":
-            rewards: Tensor = batch["reward_nsteps"]
-            next_observations: dict[str, Tensor] = batch["next_state_nsteps"]
-            done: Tensor = batch["done_nsteps"]
+            rewards: Tensor = batch["reward"]
+            next_observations: dict[str, Tensor] = batch["next_state"]
+            done: Tensor = batch["mask"]
+            valid: Tensor = batch["valid"]
             next_observation_features: Tensor = batch.get("next_observation_feature")
 
             loss_total, info = self.compute_total_loss(
@@ -263,6 +302,7 @@ class ACFQLPolicy(
                 rewards=rewards,
                 next_observations=next_observations,
                 done=done,
+                valid=valid,
                 observation_features=observation_features,
                 next_observation_features=next_observation_features
             )
@@ -289,6 +329,7 @@ class ACFQLPolicy(
         rewards,
         next_observations,
         done,
+        valid,
         observation_features: Tensor | None = None,
         next_observation_features: Tensor | None = None
     ):
@@ -299,6 +340,7 @@ class ACFQLPolicy(
             rewards=rewards,
             next_observations=next_observations,
             done=done,
+            valid=valid,
             observation_features=observation_features,
             next_observation_features=next_observation_features,
         )
@@ -308,6 +350,7 @@ class ACFQLPolicy(
             observations=observations,
             observation_features=observation_features,
             actions=actions,
+            valid=valid,
         )
         loss_one, info_one = self.compute_loss_actor_onestep_flow(
             observations=observations,
@@ -332,20 +375,49 @@ class ACFQLPolicy(
         rewards,
         next_observations,
         done,
+        valid,
         observation_features: Tensor | None = None,
         next_observation_features: Tensor | None = None,
     ) -> Tensor:
         with torch.no_grad():
             # Compute next actions
-            _, next_qs = self._compute_next_actions(next_observations, next_observation_features)
+            next_actions = self._compute_next_actions(next_observations, next_observation_features)
 
-            # subsample critics to prevent overfitting if use high UTD (update to date)
-            # TODO: Get indices before forward pass to avoid unnecessary computation
-            if self.config.num_subsample_critics is not None:
-                raise NotImplementedError(
-                    "Subsampling critics is not implemented yet. "
-                    "Please set num_subsample_critics to None or implement the subsampling logic."
+            # print(f"Next actions: {next_actions}")
+            # print(f"Next observations: {next_observations}")
+            # print(f"Next observation features: {next_observation_features}")
+
+            check = check_nan_in_transition(
+                observations=next_observations,
+                actions=next_actions,
+                next_state=next_observation_features
+            )
+
+            # print(f"observation features: {next_observation_features}")
+
+            if check:
+                print("NaN detected in transition!")
+                check = check_nan_in_transition(
+                    observations=next_observations,
+                    actions=next_actions,
+                    next_state=next_observation_features
                 )
+
+            # Compute Q-values for these actions
+            next_qs = self.critic_forward(
+                observations=next_observations,
+                actions=next_actions,
+                use_target=True,
+                observation_features=next_observation_features,
+            )  # (critic_ensemble_size, batch_size)
+
+            # # subsample critics to prevent overfitting if use high UTD (update to date)
+            # # TODO: Get indices before forward pass to avoid unnecessary computation
+            # if self.config.num_subsample_critics is not None:
+            #     raise NotImplementedError(
+            #         "Subsampling critics is not implemented yet. "
+            #         "Please set num_subsample_critics to None or implement the subsampling logic."
+            #     )
 
             # critics ensemble aggregation (min or mean)
             if self.config.q_agg == "min":
@@ -355,8 +427,8 @@ class ACFQLPolicy(
 
             h = self.config.chunk_size
             gamma_h = self.config.discount ** h
-            bootstrap_mask = (1 - done).squeeze(-1)
-            td_target = rewards.squeeze(-1) + gamma_h * bootstrap_mask  * next_q
+            bootstrap_mask = done[:, -1].squeeze(-1)
+            td_target = rewards[:, -1] + gamma_h * bootstrap_mask  * next_q
 
         # 3- compute predicted qs
         actions = actions[:, :, :].reshape(actions.shape[0], -1)  # [32, 150]
@@ -373,16 +445,8 @@ class ACFQLPolicy(
         td_target_duplicate = einops.repeat(td_target, "b -> e b", e=q_preds.shape[0])
         # You compute the mean loss of the batch for each critic and then to compute the final loss you sum them up
 
-        # TD loss
-        td_loss = F.mse_loss(
-            input=q_preds,
-            target=td_target_duplicate,
-            reduction="none",
-        )
-
-        td_loss = td_loss.mean(dim=1)
-        td_loss = td_loss.sum()
-
+        # # TD loss
+        td_loss = (((q_preds - td_target_duplicate) ** 2) * valid[:, -1]).mean(dim=1).sum()
 
         # Total critic loss
         critics_loss = td_loss
@@ -402,9 +466,8 @@ class ACFQLPolicy(
         observations,
         observation_features: Tensor | None,
         actions: Tensor | None,
+        valid: Tensor | None,
     ) -> Tensor:
-        actions = self.normalize_targets({"action": actions})["action"]
-
         batch_size = actions.shape[0]
         action_dim = self.actor_bc_flow.action_dim
 
@@ -421,7 +484,7 @@ class ACFQLPolicy(
         vel_pred = vel_pred.reshape(batch_size, self.config.chunk_size, -1)
         vel = vel.reshape(batch_size, self.config.chunk_size, -1)
 
-        bc_flow_loss = F.mse_loss(input=vel_pred, target=vel)
+        bc_flow_loss =(((vel_pred - vel) ** 2) * valid[..., None]).mean()
 
         info = {
             "bc_flow_loss": bc_flow_loss,
@@ -480,39 +543,12 @@ class ACFQLPolicy(
         action_dim = self.actor_onestep_flow.action_dim
         device = next_observations["observation.state"].device
 
-        # Determine how many actions to sample
-        sample_n_actions = 1
+        all_noises = torch.randn(batch_size, action_dim, device=device)
 
-        # Sample all actions at once to be more efficient
-        all_noises = torch.randn(batch_size, sample_n_actions, action_dim, device=device)
+        next_actions = self.actor_onestep_flow(next_observations, next_observation_features, all_noises)
+        next_actions = torch.clamp(next_actions, -1.0, 1.0)
 
-        next_qs_list = []
-        for i in range(sample_n_actions):
-            # Sample next actions for this noise sample
-            next_actions = self.actor_onestep_flow(
-                next_observations, next_observation_features, all_noises[:, i]
-            )
-            next_actions = torch.clamp(next_actions, -1.0, 1.0)
-
-            # Compute Q-values for these actions
-            next_qs_sampled = self.critic_forward(
-                observations=next_observations,
-                actions=next_actions,
-                use_target=True,
-                observation_features=next_observation_features,
-            )  # (critic_ensemble_size, batch_size)
-
-            next_qs_list.append(next_qs_sampled)
-
-        # Stack to get shape: (critic_ensemble_size, batch_size)
-        # Each element in next_qs_list has shape (critic_ensemble_size, batch_size)
-        # We want to aggregate over the n_actions dimension first, then return (critic_ensemble_size, batch_size)
-        next_qs = torch.stack(next_qs_list, dim=2)  # (critic_ensemble_size, batch_size, n_actions)
-
-        # Aggregate over the n_actions dimension (take mean of sampled actions)
-        next_qs = next_qs.mean(dim=2)  # (critic_ensemble_size, batch_size)
-
-        return next_actions, next_qs
+        return next_actions
 
     def _init_normalization(self, dataset_stats):
         """Initialize input/output normalization modules."""
@@ -587,6 +623,9 @@ class ACFQLPolicy(
             **asdict(self.config.policy_kwargs),
         )
 
+        if self.config.use_torch_compile:
+            self.actor_bc_flow= torch.compile(self.actor_bc_flow)
+
     def _init_actor_onestep_flow(self, action_dim):
         """Initialize policy actor network and default target entropy."""
         self.actor_onestep_flow = ActorVectorFieldPolicy(
@@ -599,6 +638,9 @@ class ACFQLPolicy(
             encoder_is_shared=self.shared_encoder,
             **asdict(self.config.policy_kwargs),
         )
+
+        if self.config.use_torch_compile:
+            self.actor_onestep_flow = torch.compile(self.actor_onestep_flow)
 
 
 class SACObservationEncoder(nn.Module):
@@ -838,7 +880,7 @@ class CriticHead(nn.Module):
             input_dim=input_dim,
             hidden_dims=hidden_dims,
             activations=activations,
-            activate_final=False,
+            activate_final=activate_final,
             final_activation=final_activation,
             layer_norm=layer_norm,
         )
@@ -1090,68 +1132,6 @@ class SpatialLearnedEmbeddings(nn.Module):
         output = output.view(output.size(0), -1)  # [B, C*F]
 
         return output
-
-
-class RescaleFromTanh(Transform):
-    def __init__(self, low: float = -1, high: float = 1):
-        super().__init__()
-
-        self.low = low
-
-        self.high = high
-
-    def _call(self, x):
-        # Rescale from (-1, 1) to (low, high)
-
-        return 0.5 * (x + 1.0) * (self.high - self.low) + self.low
-
-    def _inverse(self, y):
-        # Rescale from (low, high) back to (-1, 1)
-
-        return 2.0 * (y - self.low) / (self.high - self.low) - 1.0
-
-    def log_abs_det_jacobian(self, x, y):
-        # log|d(rescale)/dx| = sum(log(0.5 * (high - low)))
-
-        scale = 0.5 * (self.high - self.low)
-
-        return torch.sum(torch.log(scale), dim=-1)
-
-
-class TanhMultivariateNormalDiag(TransformedDistribution):
-    def __init__(self, loc, scale_diag, low=None, high=None):
-        base_dist = MultivariateNormal(loc, torch.diag_embed(scale_diag))
-
-        transforms = [TanhTransform(cache_size=1)]
-
-        if low is not None and high is not None:
-            low = torch.as_tensor(low)
-
-            high = torch.as_tensor(high)
-
-            transforms.insert(0, RescaleFromTanh(low, high))
-
-        super().__init__(base_dist, transforms)
-
-    def mode(self):
-        # Mode is mean of base distribution, passed through transforms
-
-        x = self.base_dist.mean
-
-        for transform in self.transforms:
-            x = transform(x)
-
-        return x
-
-    def stddev(self):
-        std = self.base_dist.stddev
-
-        x = std
-
-        for transform in self.transforms:
-            x = transform(x)
-
-        return x
 
 
 def _convert_normalization_params_to_tensor(normalization_params: dict) -> dict:
