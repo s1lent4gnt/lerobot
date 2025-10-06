@@ -38,17 +38,15 @@ class BatchTransition(TypedDict):
 
 
 class BatchTransitionNSteps(TypedDict):
-    state: dict[str, torch.Tensor]
-    action_seq: torch.Tensor
-    reward_seq: torch.Tensor
-    reward_nsteps: torch.Tensor
-    done_nsteps: torch.Tensor
-    next_state_nsteps: dict[str, torch.Tensor]
-    # 1-step fields
-    next_state: dict[str, torch.Tensor]
-    done: torch.Tensor
-    truncated: torch.Tensor
+    states: dict[str, torch.Tensor]
+    actions: torch.Tensor
+    rewards: torch.Tensor
+    masks: torch.Tensor
+    terminals: torch.Tensor
+    valid: torch.Tensor
+    next_states: dict[str, torch.Tensor]
     complementary_info: dict[str, torch.Tensor | float | int] | None
+
 
 def random_crop_vectorized(images: torch.Tensor, output_size: tuple) -> torch.Tensor:
     """
@@ -343,43 +341,22 @@ class ReplayBuffer:
         idx = torch.randint(low=0, high=high, size=(batch_size,), device=self.storage_device)
         steps = torch.arange(n_steps, device=self.storage_device).view(1, -1)
 
-        def filter_valid_starts(start_idx: torch.Tensor) -> torch.Tensor:
-            # Keep only those start_idx to ensure full n-step sequences without episode breaks
-            indices = (start_idx[:, None] + steps) % self.capacity
-            dones_seq = self.dones[indices]
-            trunc_seq = self.truncateds[indices]
-            terminal_flag = torch.logical_or(dones_seq, trunc_seq)
-            first_terminal = terminal_flag.int().argmax(dim=1)
-            has_terminal = terminal_flag.any(dim=1)
-            first_terminal = torch.where(has_terminal, first_terminal, torch.tensor(n_steps - 1, device=self.storage_device))
-            return start_idx[first_terminal == (n_steps - 1)]
-
-        idx = filter_valid_starts(idx)
-        while idx.numel() < batch_size:
-            refill = torch.randint(low=0, high=high, size=(batch_size - idx.numel(),), device=self.storage_device)
-            idx = torch.cat([idx, filter_valid_starts(refill)], dim=0)
-        idx = idx[:batch_size]
-
         # Build sequences
         indices = (idx[:, None] + steps) % self.capacity
-        last_idx = (idx + (n_steps - 1)) % self.capacity
-        next_idx = (idx + n_steps) % self.capacity
 
         image_keys = [k for k in self.states if k.startswith("observation.image")] if self.use_drq else []
         batch_state_nsteps = {}
         batch_next_state_nsteps = {}
-        batch_next_state_1 = {}
 
         for key in self.states:
+            # Full sequence of observations
             batch_state_nsteps[key] = self.states[key][idx].to(self.device)
             if not self.optimize_memory:
-                # Standard approach - load next_states directly
-                batch_next_state_nsteps[key] = self.next_states[key][(last_idx + 1) % self.capacity].to(self.device)
-                batch_next_state_1[key] = self.next_states[key][idx].to(self.device)
+                # Full sequence of next observations
+                batch_next_state_nsteps[key] = self.next_states[key][idx].to(self.device)
             else:
-                # Memory-optimized approach - get next_state from the next index
-                batch_next_state_nsteps[key] = self.states[key][next_idx].to(self.device)
-                batch_next_state_1[key] = self.states[key][(idx + 1) % self.capacity].to(self.device)
+                next_indices = (idx + n_steps) % self.capacity
+                batch_next_state_nsteps[key] = self.states[key][next_indices].to(self.device)
 
         # Apply image augmentation in a batched way if needed
         if self.use_drq and image_keys:
@@ -405,15 +382,30 @@ class ReplayBuffer:
         action_seq = self.actions[indices].to(self.device)
         reward_seq = self.rewards[indices].to(self.device)
 
-        # n-step return (sum_i gamma**i * r_{t+i}); learner will ACFQLPolicy gamma**h for bootstrap
-        pow_sched = (gamma ** torch.arange(n_steps, device=self.device, dtype=reward_seq.dtype)).view(1, -1)
-        reward_nsteps = (reward_seq * pow_sched).sum(dim=1, keepdim=True)
+        # Get terminated and done flags
+        terminated_seq = self.dones[indices].float().to(self.device)
+        truncated_seq = self.truncateds[indices].float().to(self.device)
+        done_seq = torch.logical_or(terminated_seq.bool(), truncated_seq.bool()).float()  # done = terminated OR truncated
 
-        done_last = self.dones[last_idx, None].to(self.device).float()
-        trunc_last = self.truncateds[last_idx, None].to(self.device).float()
+        # Calculate cumulative rewards, masks, terminals and valid
+        rewards = torch.zeros((batch_size, n_steps), dtype=torch.float32, device=self.device)
+        masks = torch.ones((batch_size, n_steps), dtype=torch.float32, device=self.device)
+        terminals = torch.zeros((batch_size, n_steps), dtype=torch.float32, device=self.device)
+        valid = torch.ones((batch_size, n_steps), dtype=torch.float32, device=self.device)
 
-        batch_dones = self.dones[idx].to(self.device).float()
-        batch_truncs = self.truncateds[idx].to(self.device).float()
+        discount_powers = gamma ** torch.arange(n_steps, device=self.device, dtype=torch.float32)
+
+        # First step
+        rewards[:, 0] = reward_seq[:, 0]
+        masks[:, 0] = 1.0 - terminated_seq[:, 0]  # masks = 1.0 - terminated
+        terminals[:, 0] = done_seq[:, 0]  # terminals = float(done)
+
+        # Subsequent steps
+        for i in range(1, n_steps):
+            rewards[:, i] = rewards[:, i-1] + reward_seq[:, i] * discount_powers[i]
+            masks[:, i] = torch.minimum(masks[:, i-1], 1.0 - terminated_seq[:, i])  # Cumulative masks
+            terminals[:, i] = torch.maximum(terminals[:, i-1], done_seq[:, i])  # Cumulative terminals
+            valid[:, i] = 1.0 - terminals[:, i-1]  # Valid mask
 
         # Sample complementary_info if available
         batch_complementary_info = None
@@ -424,17 +416,14 @@ class ReplayBuffer:
 
         return BatchTransitionNSteps(
             state=batch_state_nsteps,
-            action_seq=action_seq,
-            reward_seq=reward_seq,
-            reward_nsteps=reward_nsteps,
-            done_nsteps=done_last,
-            next_state_nsteps=batch_next_state_nsteps,
-            next_state=batch_next_state_1,
-            done=batch_dones,
-            truncated=batch_truncs,
+            actions=action_seq,
+            rewards=rewards,
+            masks=masks,
+            terminals=terminals,
+            valid=valid,
+            next_state=batch_next_state_nsteps,
             complementary_info=batch_complementary_info,
         )
-
 
     def get_iterator(
         self,
