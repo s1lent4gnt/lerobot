@@ -335,7 +335,7 @@ class ReplayBuffer:
             raise ValueError("n_steps must be >= 1.")
 
         batch_size = min(batch_size, self.size)
-        high = max(0, self.size - 1) if self.optimize_memory and self.size < self.capacity else self.size
+        high = max(0, self.size - n_steps - 1) if self.optimize_memory and self.size < self.capacity else self.size
 
         # Random indices for sampling - create on the same device as storage
         idx = torch.randint(low=0, high=high, size=(batch_size,), device=self.storage_device)
