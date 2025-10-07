@@ -383,26 +383,6 @@ class ACFQLPolicy(
             # Compute next actions
             next_actions = self._compute_next_actions(next_observations, next_observation_features)
 
-            # print(f"Next actions: {next_actions}")
-            # print(f"Next observations: {next_observations}")
-            # print(f"Next observation features: {next_observation_features}")
-
-            check = check_nan_in_transition(
-                observations=next_observations,
-                actions=next_actions,
-                next_state=next_observation_features
-            )
-
-            # print(f"observation features: {next_observation_features}")
-
-            if check:
-                print("NaN detected in transition!")
-                check = check_nan_in_transition(
-                    observations=next_observations,
-                    actions=next_actions,
-                    next_state=next_observation_features
-                )
-
             # Compute Q-values for these actions
             next_qs = self.critic_forward(
                 observations=next_observations,
@@ -411,13 +391,13 @@ class ACFQLPolicy(
                 observation_features=next_observation_features,
             )  # (critic_ensemble_size, batch_size)
 
-            # # subsample critics to prevent overfitting if use high UTD (update to date)
-            # # TODO: Get indices before forward pass to avoid unnecessary computation
-            # if self.config.num_subsample_critics is not None:
-            #     raise NotImplementedError(
-            #         "Subsampling critics is not implemented yet. "
-            #         "Please set num_subsample_critics to None or implement the subsampling logic."
-            #     )
+            # subsample critics to prevent overfitting if use high UTD (update to date)
+            # TODO: Get indices before forward pass to avoid unnecessary computation
+            if self.config.num_subsample_critics is not None:
+                raise NotImplementedError(
+                    "Subsampling critics is not implemented yet. "
+                    "Please set num_subsample_critics to None or implement the subsampling logic."
+                )
 
             # critics ensemble aggregation (min or mean)
             if self.config.q_agg == "min":

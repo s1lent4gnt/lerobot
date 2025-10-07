@@ -338,12 +338,17 @@ def add_actor_information_and_train(
 
     log_training_info(cfg=cfg, policy=policy)
 
-    replay_buffer = initialize_replay_buffer(cfg, device, storage_device)
+    # replay_buffer = initialize_replay_buffer(cfg, device, storage_device)
     batch_size = cfg.batch_size
     offline_replay_buffer = None
 
     if cfg.dataset is not None:
         offline_replay_buffer = initialize_offline_replay_buffer(
+            cfg=cfg,
+            device=device,
+            storage_device=storage_device,
+        )
+        replay_buffer = initialize_offline_replay_buffer(
             cfg=cfg,
             device=device,
             storage_device=storage_device,
@@ -395,7 +400,6 @@ def add_actor_information_and_train(
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
-            # observation_features, next_observation_features = None, None
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
@@ -493,9 +497,9 @@ def add_actor_information_and_train(
             shutdown_event=shutdown_event,
         )
 
-        # Wait until the replay buffer has enough samples to start training
-        if len(replay_buffer) < online_step_before_learning:
-            continue
+        # # Wait until the replay buffer has enough samples to start training
+        # if len(replay_buffer) < online_step_before_learning:
+        #     continue
 
         if online_iterator is None:
             online_iterator = replay_buffer.get_iterator_nstep(
@@ -525,7 +529,6 @@ def add_actor_information_and_train(
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
-            # observation_features, next_observation_features = None, None
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
