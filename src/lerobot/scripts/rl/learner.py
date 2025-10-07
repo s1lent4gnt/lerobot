@@ -431,10 +431,10 @@ def add_actor_information_and_train(
             training_infos = total_out["info"]
             training_infos["total_grad_norm"] = total_grad_norm
 
-            # Push policy to actors periodically
-            if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
-                push_actor_policy_to_queue(parameters_queue=parameters_queue, policy=policy)
-                last_time_policy_pushed = time.time()
+            # # Push policy to actors periodically
+            # if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
+            #     push_actor_policy_to_queue(parameters_queue=parameters_queue, policy=policy)
+            #     last_time_policy_pushed = time.time()
 
             # Logging
             if optimization_step % log_freq == 0:
@@ -456,7 +456,7 @@ def add_actor_information_and_train(
             optimization_step += 1
 
             # Save checkpoint
-            if saving_checkpoint and (optimization_step % save_freq == 0):
+            if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == offline_steps):
                 save_training_checkpoint(
                     cfg=cfg, optimization_step=optimization_step, online_steps=online_steps,
                     interaction_message=interaction_message, policy=policy, optimizers=optimizers,
@@ -497,9 +497,9 @@ def add_actor_information_and_train(
             shutdown_event=shutdown_event,
         )
 
-        # # Wait until the replay buffer has enough samples to start training
-        # if len(replay_buffer) < online_step_before_learning:
-        #     continue
+        # Wait until the replay buffer has enough samples to start training
+        if len(replay_buffer) < online_step_before_learning:
+            continue
 
         if online_iterator is None:
             online_iterator = replay_buffer.get_iterator_nstep(
@@ -752,11 +752,16 @@ def save_training_checkpoint(
     # Save dataset
     # NOTE: Handle the case where the dataset repo id is not specified in the config
     # eg. RL training without demonstrations data
-    repo_id_buffer_save = cfg.env.task if dataset_repo_id is None else dataset_repo_id
-    replay_buffer.to_lerobot_dataset(repo_id=repo_id_buffer_save, fps=fps, root=dataset_dir)
+    if replay_buffer is not None:
+        repo_id_buffer_save = cfg.env.task if dataset_repo_id is None else dataset_repo_id
+        logging.info(f"Saving replay buffer to {dataset_dir} with repo id {repo_id_buffer_save}")
+        replay_buffer.to_lerobot_dataset(repo_id=repo_id_buffer_save, fps=fps, root=dataset_dir)
 
     if offline_replay_buffer is not None:
         dataset_offline_dir = os.path.join(cfg.output_dir, "dataset_offline")
+        logging.info(
+            f"Saving offline replay buffer to {dataset_offline_dir} with repo id {cfg.dataset.repo_id}"
+        )
         if os.path.exists(dataset_offline_dir) and os.path.isdir(dataset_offline_dir):
             shutil.rmtree(dataset_offline_dir)
 

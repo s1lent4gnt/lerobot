@@ -313,8 +313,8 @@ class RobotEnv(gym.Env):
 
         if self.use_gripper:
             action_dim += 1
-            bounds["min"] = np.concatenate([bounds["min"], [0]])
-            bounds["max"] = np.concatenate([bounds["max"], [2]])
+            bounds["min"] = np.concatenate([bounds["min"], [-1]])
+            bounds["max"] = np.concatenate([bounds["max"], [1]])
 
         self.action_space = gym.spaces.Box(
             low=bounds["min"],
