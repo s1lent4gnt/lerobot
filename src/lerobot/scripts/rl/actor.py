@@ -648,10 +648,10 @@ def update_policy_parameters(
 ):
     bytes_state_dict = get_last_item_from_queue(parameters_queue, block=False)
 
-    # while bytes_state_dict is None and wait_for_update:
-    #     # logging.info("[ACTOR] Waiting for updated policy parameters from Learner...")
-    #     bytes_state_dict = get_last_item_from_queue(parameters_queue, block=False)
-    #     time.sleep(2)
+    while bytes_state_dict is None and wait_for_update:
+        # logging.info("[ACTOR] Waiting for updated policy parameters from Learner...")
+        bytes_state_dict = get_last_item_from_queue(parameters_queue, block=False)
+        time.sleep(2)
 
     if bytes_state_dict is not None:
         logging.info("[ACTOR] Load new parameters from Learner.")
