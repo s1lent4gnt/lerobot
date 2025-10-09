@@ -647,7 +647,7 @@ def add_actor_information_and_train(
             policy.update_target_networks()  # keep EMA on critic target as before
 
         # Sample from the iterators
-        batch = next(offline_iterator)
+        batch = next(online_iterator)
 
         # Extract n-step batch components
         actions = batch["actions"]  # [B, h, action_dim]
