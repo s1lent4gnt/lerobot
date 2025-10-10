@@ -340,17 +340,12 @@ def add_actor_information_and_train(
 
     log_training_info(cfg=cfg, policy=policy)
 
-    # replay_buffer = initialize_replay_buffer(cfg, device, storage_device)
+    replay_buffer = initialize_replay_buffer(cfg, device, storage_device)
     batch_size = cfg.batch_size
     offline_replay_buffer = None
 
     if cfg.dataset is not None:
         offline_replay_buffer = initialize_offline_replay_buffer(
-            cfg=cfg,
-            device=device,
-            storage_device=storage_device,
-        )
-        replay_buffer = initialize_offline_replay_buffer(
             cfg=cfg,
             device=device,
             storage_device=storage_device,
@@ -857,7 +852,7 @@ def save_training_checkpoint(
     interaction_message: dict | None,
     policy: nn.Module,
     optimizers: dict[str, Optimizer],
-    replay_buffer: ReplayBuffer,
+    replay_buffer: ReplayBuffer | None = None,
     offline_replay_buffer: ReplayBuffer | None = None,
     dataset_repo_id: str | None = None,
     fps: int = 30,
