@@ -31,52 +31,6 @@ from lerobot.policies.normalize import NormalizeBuffer, UnnormalizeBuffer
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import get_device_from_parameters
 
-import logging
-
-def check_nan_in_transition(
-    observations: torch.Tensor,
-    actions: torch.Tensor,
-    next_state: torch.Tensor,
-    raise_error: bool = False,
-) -> bool:
-    """
-    Check for NaN values in transition data.
-
-    Args:
-        observations: Dictionary of observation tensors
-        actions: Action tensor
-        next_state: Dictionary of next state tensors
-        raise_error: If True, raises ValueError when NaN is detected
-
-    Returns:
-        bool: True if NaN values were detected, False otherwise
-    """
-    nan_detected = False
-
-    # Check observations
-    for key, tensor in observations.items():
-        if torch.isnan(tensor).any():
-            logging.error(f"observations[{key}] contains NaN values")
-            nan_detected = True
-            if raise_error:
-                raise ValueError(f"NaN detected in observations[{key}]")
-
-    # Check next state
-    for key, tensor in next_state.items():
-        if torch.isnan(tensor).any():
-            logging.error(f"next_state[{key}] contains NaN values")
-            nan_detected = True
-            if raise_error:
-                raise ValueError(f"NaN detected in next_state[{key}]")
-
-    # Check actions
-    if torch.isnan(actions).any():
-        logging.error("actions contains NaN values")
-        nan_detected = True
-        if raise_error:
-            raise ValueError("NaN detected in actions")
-
-    return nan_detected
 
 class ACFQLPolicy(
     PreTrainedPolicy,
