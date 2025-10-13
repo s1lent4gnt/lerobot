@@ -380,9 +380,15 @@ def add_actor_information_and_train(
                 logging.info("[LEARNER] Shutdown signal received during offline training. Exiting...")
                 return
 
+            # --- PROFILING ---
+            timers = {}
             time_for_one_optimization_step = time.time()
+
             for _ in range(utd_ratio -1):
+                # --- PROFILING: Data Loading ---
+                start_time = time.time()
                 batch = next(offline_iterator)
+                timers["data_loading"] = timers.get("data_loading", 0) + (time.time() - start_time)
 
                 # Extract n-step batch components
                 actions = batch["actions"]  # [B, h, action_dim]
@@ -395,9 +401,16 @@ def add_actor_information_and_train(
                     next_state=next_observations_nsteps
                 )
 
+                # --- PROFILING: Feature Extraction ---
+                start_time = time.time()
                 observation_features, next_observation_features = get_observation_features(
                     policy=policy, observations=observations, next_observations=next_observations_nsteps,
                 )
+                timers["feature_extraction"] = timers.get("feature_extraction", 0) + (time.time() - start_time)
+
+                # Use precomputed action embeddings from recorded dataset (now in state)
+                action_embedding = observations.get("action_embedding")
+                next_action_embeddings = next_observations_nsteps.get("action_embedding")
 
                 # Create a batch dictionary with all required elements for the forward method
                 forward_batch = {
@@ -410,9 +423,13 @@ def add_actor_information_and_train(
                     "next_state": batch["next_state"],
                     "observation_feature": observation_features,
                     "next_observation_feature": next_observation_features,
+                    "action_embeddings": action_embedding,
+                    "next_action_embeddings": next_action_embeddings,
                     "complementary_info": batch.get("complementary_info"),
                 }
 
+                # --- PROFILING: Critic Update ---
+                start_time = time.time()
                 # Use the forward method for critic loss
                 critic_output = policy.forward(forward_batch, model="critic")
 
@@ -427,9 +444,14 @@ def add_actor_information_and_train(
 
                 # Update target networks
                 policy.update_target_networks()  # keep EMA on critic target as before
+                timers["critic_update"] = timers.get("critic_update", 0) + (time.time() - start_time)
 
             # Sample from the iterators
+            # --- PROFILING: Data Loading ---
+            start_time = time.time()
             batch = next(offline_iterator)
+            timers["data_loading"] = timers.get("data_loading", 0) + (time.time() - start_time)
+
 
             # Extract n-step batch components
             actions = batch["actions"]  # [B, h, action_dim]
@@ -439,12 +461,19 @@ def add_actor_information_and_train(
             check_nan_in_transition(
                 observations=observations,
                 actions=actions.reshape(actions.shape[0], -1),
-                next_state=next_observations_nsteps
+                next_state=next_observations_nsteps,
             )
 
+            # --- PROFILING: Feature Extraction ---
+            start_time = time.time()
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
+            timers["feature_extraction"] = timers.get("feature_extraction", 0) + (time.time() - start_time)
+
+                # Use precomputed action embeddings from recorded dataset (now in state)
+            action_embedding = observations.get("action_embedding")
+            next_action_embeddings = next_observations_nsteps.get("action_embedding")
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
@@ -460,6 +489,8 @@ def add_actor_information_and_train(
                 "complementary_info": batch.get("complementary_info"),
             }
 
+            # --- PROFILING: Critic Update ---
+            start_time = time.time()
             critic_output = policy.forward(forward_batch, model="critic")
 
             loss_critic = critic_output["loss_critic"]
@@ -469,6 +500,7 @@ def add_actor_information_and_train(
                 parameters=policy.critic_ensemble.parameters(), max_norm=clip_grad_norm_value
             ).item()
             optimizers["critic"].step()
+            timers["critic_update"] = timers.get("critic_update", 0) + (time.time() - start_time)
 
 
             training_infos = {f"critic/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in critic_output["info"].items()}
@@ -477,6 +509,8 @@ def add_actor_information_and_train(
             if optimization_step % policy_update_freq == 0:
                 for _ in range(policy_update_freq):
 
+                    # --- PROFILING: Actor BC Flow Update ---
+                    start_time = time.time()
                     # Actor BC flow optimization
                     actor_bc_flow_output = policy.forward(forward_batch, model="actor_bc_flow")
                     loss_actor_bc_flow = actor_bc_flow_output["loss_actor_bc_flow"]
@@ -486,6 +520,8 @@ def add_actor_information_and_train(
                         parameters=policy.actor_bc_flow.parameters(), max_norm=clip_grad_norm_value
                     ).item()
                     optimizers["actor_bc_flow"].step()
+                    timers["actor_bc_flow_update"] = timers.get("actor_bc_flow_update", 0) + (time.time() - start_time)
+
 
                     # Add actor info to training info
                     # training_infos["actor_bc/loss"] = loss_actor_bc_flow.item()
@@ -493,6 +529,8 @@ def add_actor_information_and_train(
 
                     training_infos.update({f"actor_bc/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in actor_bc_flow_output["info"].items()})
 
+                    # --- PROFILING: Actor Onestep Flow Update ---
+                    start_time = time.time()
                     # Actor onestep flow optimization
                     actor_onestep_flow_output = policy.forward(forward_batch, model="actor_onestep_flow")
                     loss_actor_onestep_flow = actor_onestep_flow_output["loss_actor_onestep_flow"]
@@ -502,6 +540,7 @@ def add_actor_information_and_train(
                         parameters=policy.actor_onestep_flow.parameters(), max_norm=clip_grad_norm_value
                     ).item()
                     optimizers["actor_onestep_flow"].step()
+                    timers["actor_onestep_flow_update"] = timers.get("actor_onestep_flow_update", 0) + (time.time() - start_time)
 
                     # Add actor info to training info
                     # training_infos["actor_one/loss"] = loss_actor_onestep_flow.item()
@@ -526,6 +565,13 @@ def add_actor_information_and_train(
                 training_infos["Optimization frequency loop [Hz]"] = frequency_for_one_optimization_step
                 logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
 
+                # --- PROFILING: Log timers ---
+                profile_log_str = "[PROFILING] "
+                for key, value in timers.items():
+                    training_infos[f"profile/{key}_ms"] = value * 1000
+                    profile_log_str += f"{key}: {value * 1000:.2f}ms | "
+                logging.info(profile_log_str)
+
                 if wandb_logger:
                     wandb_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")
 
@@ -533,14 +579,14 @@ def add_actor_information_and_train(
 
             optimization_step += 1
 
-            # Save checkpoint
-            if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == offline_steps):
-                save_training_checkpoint(
-                    cfg=cfg, optimization_step=optimization_step, online_steps=online_steps,
-                    interaction_message=interaction_message, policy=policy, optimizers=optimizers,
-                    replay_buffer=replay_buffer, offline_replay_buffer=offline_replay_buffer,
-                    dataset_repo_id=cfg.dataset.repo_id if cfg.dataset else None, fps=fps,
-                )
+            # # Save checkpoint
+            # if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == offline_steps):
+            #     save_training_checkpoint(
+            #         cfg=cfg, optimization_step=optimization_step, online_steps=online_steps,
+            #         interaction_message=interaction_message, policy=policy, optimizers=optimizers,
+            #         replay_buffer=replay_buffer, offline_replay_buffer=offline_replay_buffer,
+            #         dataset_repo_id=cfg.dataset.repo_id if cfg.dataset else None, fps=fps,
+            #     )
 
         logging.info(f"[LEARNER] Completed offline pretraining after {offline_steps} steps")
 
@@ -612,6 +658,10 @@ def add_actor_information_and_train(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
 
+            # Use precomputed action embeddings from recorded dataset (now in state)
+            action_embeddings = observations.get("action_embedding")
+            next_action_embeddings = next_observations_nsteps.get("action_embedding")
+
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
                 "state": observations,
@@ -623,6 +673,8 @@ def add_actor_information_and_train(
                 "next_state": batch["next_state"],
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
+                "action_embeddings": action_embeddings,
+                "next_action_embeddings": next_action_embeddings,
                 "complementary_info": batch.get("complementary_info"),
             }
 
@@ -659,6 +711,10 @@ def add_actor_information_and_train(
             policy=policy, observations=observations, next_observations=next_observations_nsteps,
         )
 
+        # Use precomputed action embeddings from recorded dataset (now in state)
+        action_embeddings = observations.get("action_embedding")
+        next_action_embeddings = next_observations_nsteps.get("action_embedding")
+
         # Create a batch dictionary with all required elements for the forward method
         forward_batch = {
             "state": observations,
@@ -670,6 +726,8 @@ def add_actor_information_and_train(
             "next_state": batch["next_state"],
             "observation_feature": observation_features,
             "next_observation_feature": next_observation_features,
+            "action_embeddings": action_embeddings,
+            "next_action_embeddings": next_action_embeddings,
             "complementary_info": batch.get("complementary_info"),
         }
 
@@ -1228,6 +1286,35 @@ def initialize_offline_replay_buffer(
 #################################################
 
 
+# def get_observation_features(
+#     policy: ACFQLPolicy, observations: torch.Tensor, next_observations: torch.Tensor
+# ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+#     """
+#     Get observation features from the policy encoder. It act as cache for the observation features.
+#     when the encoder is frozen, the observation features are not updated.
+#     We can save compute by caching the observation features.
+
+#     Args:
+#         policy: The policy model
+#         observations: The current observations
+#         next_observations: The next observations
+
+#     Returns:
+#         tuple: observation_features, next_observation_features
+#     """
+
+#     if policy.config.vision_encoder_name is None or not policy.config.freeze_vision_encoder:
+#         return None, None
+
+#     with torch.no_grad():
+#         observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(observations, normalize=True)
+#         next_observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(
+#             next_observations, normalize=True
+#         )
+
+#     return observation_features, next_observation_features
+
+
 def get_observation_features(
     policy: ACFQLPolicy, observations: torch.Tensor, next_observations: torch.Tensor
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
@@ -1245,12 +1332,28 @@ def get_observation_features(
         tuple: observation_features, next_observation_features
     """
 
+    # TODO(lilkm): implement caching
+    if isinstance(policy, ACFQLPolicy):
+        if policy.config.vision_encoder_name is None or not policy.config.freeze_vision_encoder:
+            return None, None
+
+        # Cache critic image features
+        with torch.no_grad():
+            observation_features = policy.encoder_critic.get_cached_image_features(
+                observations, normalize=False
+            )
+            next_observation_features = policy.encoder_critic.get_cached_image_features(
+                next_observations, normalize=False
+            )
+
+        return observation_features, next_observation_features
+
     if policy.config.vision_encoder_name is None or not policy.config.freeze_vision_encoder:
         return None, None
 
     with torch.no_grad():
-        observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(observations, normalize=True)
-        next_observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(
+        observation_features = policy.actor.encoder.get_cached_image_features(observations, normalize=True)
+        next_observation_features = policy.actor.encoder.get_cached_image_features(
             next_observations, normalize=True
         )
 

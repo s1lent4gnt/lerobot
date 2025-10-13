@@ -24,7 +24,6 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
-from lerobot.policies.acfql.configuration_acfql import ACFQLConfig
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.octo.configuration_octo import OctoConfig
@@ -36,6 +35,8 @@ from lerobot.policies.sac.reward_model.configuration_classifier import RewardCla
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
 from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
+# from lerobot.policies.conrft.configuration_conrft import ConRFTConfig
+from lerobot.policies.acfql.configuration_acfql import ACFQLConfig
 
 
 def get_policy_class(name: str) -> PreTrainedPolicy:
@@ -68,10 +69,6 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.sac.modeling_sac import SACPolicy
 
         return SACPolicy
-    elif name == "acfql":
-        from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
-
-        return ACFQLPolicy
     elif name == "reward_classifier":
         from lerobot.policies.sac.reward_model.modeling_classifier import Classifier
 
@@ -84,6 +81,14 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.octo.modeling_octo import OctoPolicy
 
         return OctoPolicy
+    # elif name == "conrft":
+    #     from lerobot.policies.conrft.modeling_conrft import ConRFTPolicy
+
+    #     return ConRFTPolicy
+    elif name == "acfql":
+        from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
+
+        return ACFQLPolicy
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
@@ -103,14 +108,16 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return PI0FASTConfig(**kwargs)
     elif policy_type == "sac":
         return SACConfig(**kwargs)
-    elif policy_type == "acfql":
-        return ACFQLConfig(**kwargs)
     elif policy_type == "smolvla":
         return SmolVLAConfig(**kwargs)
     elif policy_type == "octo":
         return OctoConfig(**kwargs)
     elif policy_type == "reward_classifier":
         return RewardClassifierConfig(**kwargs)
+    # elif policy_type == "conrft":
+    #     return ConRFTConfig(**kwargs)
+    elif policy_type == "acfql":
+        return ACFQLConfig(**kwargs)
     else:
         raise ValueError(f"Policy type '{policy_type}' is not available.")
 
@@ -172,16 +179,10 @@ def make_policy(
         features = env_to_policy_features(env_cfg)
 
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
-    # TODO: cfg.input_features is used to specify which features are used as input to the policy.
-    cfg.input_features = {
-        key: ft
-        for key, ft in features.items()
-        if key not in cfg.output_features and key in cfg.input_features
-    }
+    cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
     kwargs["config"] = cfg
 
     if cfg.pretrained_path:
-        logging.info(f"Loading pretrained policy from {cfg.pretrained_path}")
         # Load a pretrained policy and override the config if needed (for example, if there are inference-time
         # hyperparameters that we want to vary).
         kwargs["pretrained_name_or_path"] = cfg.pretrained_path

@@ -164,6 +164,19 @@ class ACFQLConfig(PreTrainedConfig):
     use_terminal_for_next_state: bool = True
     mask_truncated_td_loss: bool = False
 
+    # Octo model parameters
+    # Required VLA model (ConRFT always uses Octo)
+    base_vla_model_path: str = "lilkm/octo-small-test"
+    freeze_base_vla: bool = True
+
+    # Pretrained policy checkpoint path (for loading from offline training)
+    # pretrained_model_path: str | None = None
+
+    # Proprioception settings
+    use_proprio: bool = True
+    proprio_latent_dim: int = 64
+    state_dim: int = 18
+
     # SAC algorithm parameters
     # Discount factor for the SAC algorithm
     discount: float = 0.99

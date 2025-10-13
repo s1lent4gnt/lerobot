@@ -18,6 +18,7 @@ from typing import Any
 
 import draccus
 
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.constants import ACTION, OBS_ENV_STATE, OBS_IMAGE, OBS_IMAGES, OBS_STATE
 from lerobot.robots import RobotConfig
@@ -170,6 +171,13 @@ class VideoRecordConfig:
 
 
 @dataclass
+class EmbeddingConfig:
+    """Configuration for action embedding computation."""
+    compute_embeddings: bool = True
+    embedding_dim: int = 384
+
+
+@dataclass
 class EnvTransformConfig:
     """Configuration for environment wrappers."""
 
@@ -223,6 +231,7 @@ class HILSerlRobotEnvConfig(EnvConfig):
 class HILEnvConfig(EnvConfig):
     """Configuration for the HIL environment."""
 
+    embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     name: str = "PandaPickCube"
     task: str | None = "PandaPickCubeKeyboard-v0"
     use_viewer: bool = True
@@ -260,6 +269,7 @@ class HILEnvConfig(EnvConfig):
     device: str = "cuda"
     push_to_hub: bool = True
     pretrained_policy_name_or_path: str | None = None
+    policy: PreTrainedConfig | None = None
     # For the reward classifier, to record more positive examples after a success
     number_of_steps_after_success: int = 0
     ############################

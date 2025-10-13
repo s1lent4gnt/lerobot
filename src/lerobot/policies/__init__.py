@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from .act.configuration_act import ACTConfig as ACTConfig
+# from .conrft.configuration_conrft import ConRFTConfig as ConRFTConfig
+from .acfql.configuration_acfql import ACFQLConfig as ACFQLConfig
 from .diffusion.configuration_diffusion import DiffusionConfig as DiffusionConfig
 from .octo.configuration_octo import OctoConfig as OctoConfig
 from .pi0.configuration_pi0 import PI0Config as PI0Config
