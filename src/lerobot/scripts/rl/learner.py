@@ -486,6 +486,8 @@ def add_actor_information_and_train(
                 "next_state": batch["next_state"],
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
+                "action_embeddings": action_embedding,
+                "next_action_embeddings": next_action_embeddings,
                 "complementary_info": batch.get("complementary_info"),
             }
 
