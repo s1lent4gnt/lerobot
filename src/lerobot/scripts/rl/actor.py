@@ -332,9 +332,14 @@ def act_with_policy(
             policy.reset()  # Reset policy state if needed
             pending_actions.clear()  # Clear any remaining actions from the chunk
 
+        # Add action embedding to state dictionary if available
+        state_with_embedding = obs.copy()
+        if current_action_embedding is not None:
+            state_with_embedding["action_embedding"] = current_action_embedding
+
         list_transition_to_send_to_learner.append(
             Transition(
-                state=obs,
+                state=state_with_embedding,
                 action=action,
                 reward=reward,
                 next_state=next_obs,
@@ -349,11 +354,6 @@ def act_with_policy(
         _, current_action_embedding = policy.select_action_with_embedding(observations=obs)  # [h, A]
         if current_action_embedding is not None:
             current_action_embedding = current_action_embedding.cpu()
-
-        # Add action embedding to state dictionary if available
-        state_with_embedding = obs.copy()
-        if current_action_embedding is not None:
-            state_with_embedding["action_embedding"] = current_action_embedding
 
         if done or truncated:
             logging.info(f"[ACTOR] Global step {interaction_step}: Episode reward: {sum_reward_episode}")
