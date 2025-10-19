@@ -468,35 +468,24 @@ class ACFQLPolicy(
         actions: Tensor | None,
         action_embeddings: Tensor | None = None,
     ) -> Tensor:
-        import time
-
         batch_size = actions.shape[0]
         action_dim = self.actor_onestep_flow.action_dim
 
         # Distillation loss
         noises = torch.randn(batch_size, action_dim, device=observations["observation.state"].device)
-
-        start_time = time.time()
         target_flow_actions = self.compute_flow_actions(observations, observation_features, noises, action_embeddings)
-        print(f"[PROFILING] compute_flow_actions: {(time.time() - start_time) * 1000:.2f}ms")
-
-        start_time = time.time()
         actor_actions = self.actor_onestep_flow(observations, observation_features, noises, action_embeddings=action_embeddings)
-        print(f"[PROFILING] actor_onestep_flow forward: {(time.time() - start_time) * 1000:.2f}ms")
-
         distill_loss = F.mse_loss(input=actor_actions, target=target_flow_actions)
 
         # Q loss
         actor_actions = torch.clamp(actor_actions, -1.0, 1.0)
 
-        start_time = time.time()
         q_preds = self.critic_forward(
             observations=observations,
             actions=actor_actions,
             use_target=False,
             observation_features=observation_features,
         )
-        print(f"[PROFILING] critic_forward: {(time.time() - start_time) * 1000:.2f}ms")
 
         q_vals = q_preds.mean(dim=0)
         q_loss = -q_vals.mean()
@@ -564,30 +553,30 @@ class ACFQLPolicy(
         """Initialize shared or separate encoders for actor and critic."""
         self.shared_encoder = self.config.shared_encoder
         self.encoder_critic = SACObservationEncoder(self.config, self.normalize_inputs)
-        self.encoder_actor_bc_flow = (
-            self.encoder_critic
-            if self.shared_encoder
-            else SACObservationEncoder(self.config, self.normalize_inputs)
-        )
-        self.encoder_actor_onestep_flow = (
-            self.encoder_critic
-            if self.shared_encoder
-            else SACObservationEncoder(self.config, self.normalize_inputs)
-        )
-
-        # self.encoder_actor_bc_flow = OctoEncodingWrapper(
-        #     self.octo_policy,
-        #     use_proprio=self.config.use_proprio,
-        #     state_dim=self.config.state_dim,
-        #     proprio_latent_dim=self.config.proprio_latent_dim,
+        # self.encoder_actor_bc_flow = (
+        #     self.encoder_critic
+        #     if self.shared_encoder
+        #     else SACObservationEncoder(self.config, self.normalize_inputs)
+        # )
+        # self.encoder_actor_onestep_flow = (
+        #     self.encoder_critic
+        #     if self.shared_encoder
+        #     else SACObservationEncoder(self.config, self.normalize_inputs)
         # )
 
-        # self.encoder_actor_onestep_flow = OctoEncodingWrapper(
-        #     self.octo_policy,
-        #     use_proprio=self.config.use_proprio,
-        #     state_dim=self.config.state_dim,
-        #     proprio_latent_dim=self.config.proprio_latent_dim,
-        # )
+        self.encoder_actor_bc_flow = OctoEncodingWrapper(
+            self.octo_policy,
+            use_proprio=self.config.use_proprio,
+            state_dim=self.config.state_dim,
+            proprio_latent_dim=self.config.proprio_latent_dim,
+        )
+
+        self.encoder_actor_onestep_flow = OctoEncodingWrapper(
+            self.octo_policy,
+            use_proprio=self.config.use_proprio,
+            state_dim=self.config.state_dim,
+            proprio_latent_dim=self.config.proprio_latent_dim,
+        )
 
     def _init_critics(self, action_dim):
         """Build critic ensemble and targets"""
@@ -942,7 +931,6 @@ class CriticEnsemble(nn.Module):
         actions: torch.Tensor,
         observation_features: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        import time
         device = get_device_from_parameters(self)
         # Move each tensor in observations to device
         observations = {k: v.to(device) for k, v in observations.items()}
@@ -952,18 +940,14 @@ class CriticEnsemble(nn.Module):
         # actions = self.output_normalization(actions)["action"]
         actions = actions.to(device)
 
-        start_time = time.time()
         obs_enc = self.encoder(observations, cache=observation_features)
-        print(f"[PROFILING] CriticEnsemble encoder: {(time.time() - start_time) * 1000:.2f}ms")
 
         inputs = torch.cat([obs_enc, actions], dim=-1)
 
         # Loop through critics and collect outputs
         q_values = []
-        start_time = time.time()
         for critic in self.critics:
             q_values.append(critic(inputs))
-        print(f"[PROFILING] CriticEnsemble critic heads: {(time.time() - start_time) * 1000:.2f}ms")
 
         # Stack outputs to match expected shape [num_critics, batch_size]
         q_values = torch.stack([q.squeeze(-1) for q in q_values], dim=0)
@@ -1028,10 +1012,10 @@ class ActorVectorFieldPolicy(nn.Module):
             times (Tensor, optional): Times.
             is_encoded (bool): Whether the observations are already encoded.
         """
-        obs_enc = self.encoder(observations, cache=observation_features, detach=self.encoder_is_shared)
-        # obs_enc, action_embeddings = self.encoder(
-        #     observations, tasks=tasks, action_embeddings=action_embeddings
-        # )
+        # obs_enc = self.encoder(observations, cache=observation_features, detach=self.encoder_is_shared)
+        obs_enc, action_embeddings = self.encoder(
+            observations, tasks=tasks, action_embeddings=action_embeddings
+        )
         inputs = [obs_enc, actions]
         if times is not None:
             inputs.append(times)

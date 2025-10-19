@@ -380,15 +380,10 @@ def add_actor_information_and_train(
                 logging.info("[LEARNER] Shutdown signal received during offline training. Exiting...")
                 return
 
-            # --- PROFILING ---
-            timers = {}
             time_for_one_optimization_step = time.time()
 
             for _ in range(utd_ratio -1):
-                # --- PROFILING: Data Loading ---
-                start_time = time.time()
                 batch = next(offline_iterator)
-                timers["data_loading"] = timers.get("data_loading", 0) + (time.time() - start_time)
 
                 # Extract n-step batch components
                 actions = batch["actions"]  # [B, h, action_dim]
@@ -401,12 +396,9 @@ def add_actor_information_and_train(
                     next_state=next_observations_nsteps
                 )
 
-                # --- PROFILING: Feature Extraction ---
-                start_time = time.time()
                 observation_features, next_observation_features = get_observation_features(
                     policy=policy, observations=observations, next_observations=next_observations_nsteps,
                 )
-                timers["feature_extraction"] = timers.get("feature_extraction", 0) + (time.time() - start_time)
 
                 # Use precomputed action embeddings from recorded dataset (now in state)
                 action_embedding = observations.get("action_embedding")
@@ -428,8 +420,6 @@ def add_actor_information_and_train(
                     "complementary_info": batch.get("complementary_info"),
                 }
 
-                # --- PROFILING: Critic Update ---
-                start_time = time.time()
                 # Use the forward method for critic loss
                 critic_output = policy.forward(forward_batch, model="critic")
 
@@ -444,14 +434,9 @@ def add_actor_information_and_train(
 
                 # Update target networks
                 policy.update_target_networks()  # keep EMA on critic target as before
-                timers["critic_update"] = timers.get("critic_update", 0) + (time.time() - start_time)
 
             # Sample from the iterators
-            # --- PROFILING: Data Loading ---
-            start_time = time.time()
             batch = next(offline_iterator)
-            timers["data_loading"] = timers.get("data_loading", 0) + (time.time() - start_time)
-
 
             # Extract n-step batch components
             actions = batch["actions"]  # [B, h, action_dim]
@@ -464,12 +449,9 @@ def add_actor_information_and_train(
                 next_state=next_observations_nsteps,
             )
 
-            # --- PROFILING: Feature Extraction ---
-            start_time = time.time()
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations_nsteps,
             )
-            timers["feature_extraction"] = timers.get("feature_extraction", 0) + (time.time() - start_time)
 
                 # Use precomputed action embeddings from recorded dataset (now in state)
             action_embedding = observations.get("action_embedding")
@@ -491,8 +473,6 @@ def add_actor_information_and_train(
                 "complementary_info": batch.get("complementary_info"),
             }
 
-            # --- PROFILING: Critic Update ---
-            start_time = time.time()
             critic_output = policy.forward(forward_batch, model="critic")
 
             loss_critic = critic_output["loss_critic"]
@@ -502,8 +482,6 @@ def add_actor_information_and_train(
                 parameters=policy.critic_ensemble.parameters(), max_norm=clip_grad_norm_value
             ).item()
             optimizers["critic"].step()
-            timers["critic_update"] = timers.get("critic_update", 0) + (time.time() - start_time)
-
 
             training_infos = {f"critic/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in critic_output["info"].items()}
             training_infos["critic/grad_norm"] = critic_grad_norm
@@ -511,8 +489,6 @@ def add_actor_information_and_train(
             if optimization_step % policy_update_freq == 0:
                 for _ in range(policy_update_freq):
 
-                    # --- PROFILING: Actor BC Flow Update ---
-                    start_time = time.time()
                     # Actor BC flow optimization
                     actor_bc_flow_output = policy.forward(forward_batch, model="actor_bc_flow")
                     loss_actor_bc_flow = actor_bc_flow_output["loss_actor_bc_flow"]
@@ -522,8 +498,6 @@ def add_actor_information_and_train(
                         parameters=policy.actor_bc_flow.parameters(), max_norm=clip_grad_norm_value
                     ).item()
                     optimizers["actor_bc_flow"].step()
-                    timers["actor_bc_flow_update"] = timers.get("actor_bc_flow_update", 0) + (time.time() - start_time)
-
 
                     # Add actor info to training info
                     # training_infos["actor_bc/loss"] = loss_actor_bc_flow.item()
@@ -531,8 +505,6 @@ def add_actor_information_and_train(
 
                     training_infos.update({f"actor_bc/{k}": v.item() if isinstance(v, torch.Tensor) else v for k, v in actor_bc_flow_output["info"].items()})
 
-                    # --- PROFILING: Actor Onestep Flow Update ---
-                    start_time = time.time()
                     # Actor onestep flow optimization
                     actor_onestep_flow_output = policy.forward(forward_batch, model="actor_onestep_flow")
                     loss_actor_onestep_flow = actor_onestep_flow_output["loss_actor_onestep_flow"]
@@ -541,8 +513,6 @@ def add_actor_information_and_train(
                     actor_onestep_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
                         parameters=policy.actor_onestep_flow.parameters(), max_norm=clip_grad_norm_value
                     ).item()
-                    optimizers["actor_onestep_flow"].step()
-                    timers["actor_onestep_flow_update"] = timers.get("actor_onestep_flow_update", 0) + (time.time() - start_time)
 
                     # Add actor info to training info
                     # training_infos["actor_one/loss"] = loss_actor_onestep_flow.item()
@@ -566,13 +536,6 @@ def add_actor_information_and_train(
                 frequency_for_one_optimization_step = 1 / (time_for_one_optimization_step + 1e-9)
                 training_infos["Optimization frequency loop [Hz]"] = frequency_for_one_optimization_step
                 logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
-
-                # --- PROFILING: Log timers ---
-                profile_log_str = "[PROFILING] "
-                for key, value in timers.items():
-                    training_infos[f"profile/{key}_ms"] = value * 1000
-                    profile_log_str += f"{key}: {value * 1000:.2f}ms | "
-                logging.info(profile_log_str)
 
                 if wandb_logger:
                     wandb_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")

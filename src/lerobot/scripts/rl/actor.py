@@ -304,7 +304,6 @@ def act_with_policy(
 
             log_policy_frequency_issue(policy_fps=policy_fps, cfg=cfg, interaction_step=interaction_step)
 
-
             # Fill the pending queue with the chunk's primitive actions
             for i in range(actions_chunk.shape[0]):
                 pending_actions.append(actions_chunk[i])
@@ -333,6 +332,10 @@ def act_with_policy(
             pending_actions.clear()  # Clear any remaining actions from the chunk
 
         # Add action embedding to state dictionary if available
+        _, current_action_embedding = policy.select_action_with_embedding(observations=obs)  # [h, A]
+        if current_action_embedding is not None:
+            current_action_embedding = current_action_embedding.cpu()
+
         state_with_embedding = obs.copy()
         if current_action_embedding is not None:
             state_with_embedding["action_embedding"] = current_action_embedding
@@ -350,10 +353,6 @@ def act_with_policy(
         )
         # assign obs to the next obs and continue the rollout
         obs = next_obs
-
-        _, current_action_embedding = policy.select_action_with_embedding(observations=obs)  # [h, A]
-        if current_action_embedding is not None:
-            current_action_embedding = current_action_embedding.cpu()
 
         if done or truncated:
             logging.info(f"[ACTOR] Global step {interaction_step}: Episode reward: {sum_reward_episode}")
