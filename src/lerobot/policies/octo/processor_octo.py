@@ -52,13 +52,13 @@ def make_octo_pre_post_processors(
         tuple[PolicyProcessorPipeline[dict[str, Any], dict[str, Any]], PolicyProcessorPipeline[PolicyAction, PolicyAction]]: A tuple containing the
         pre-processor pipeline and the post-processor pipeline.
     """
-
     input_steps = [
         RenameObservationsProcessorStep(rename_map={}),
         AddBatchDimensionProcessorStep(),
         DeviceProcessorStep(device=config.device),
+        # TODO(jpizarrom): currently input normalization is being done in the tokenizer, config.input_features can be migrated here later
         NormalizerProcessorStep(
-            features={**config.input_features, **config.output_features},
+            features={**config.output_features},
             norm_map=config.normalization_mapping,
             stats=dataset_stats,
             device=config.device,
