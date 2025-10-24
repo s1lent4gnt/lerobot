@@ -45,14 +45,13 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from lerobot.constants import ACTION
-from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.octo.configuration_octo import OctoConfig
 from lerobot.policies.octo.diffusion import DiffusionActionHead
 from lerobot.policies.octo.tokenizers import TextProcessor
 from lerobot.policies.octo.transformer import OctoWithoutHead
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import log_model_loading_keys, populate_queues
+from lerobot.utils.constants import ACTION
 
 # TODO(lilkm): Be aware of normalization the image tokenizer (normalize_images function)
 
@@ -77,13 +76,6 @@ class OctoPolicy(PreTrainedPolicy):
         """
         super().__init__(config)
         self.config = config
-        self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
-        self.normalize_targets = Normalize(
-            config.output_features, config.normalization_mapping, dataset_stats
-        )
-        self.unnormalize_outputs = Unnormalize(
-            config.output_features, config.normalization_mapping, dataset_stats
-        )
 
         self.text_processor = TextProcessor(
             tokenizer_name="t5-base",
@@ -131,12 +123,13 @@ class OctoPolicy(PreTrainedPolicy):
                 for param in self.model.octo_transformer.parameters():
                     param.requires_grad = False
 
-            if self.config.freeze_vision_encoder:
-                # Freeze vision encoder components in the transformer
-                if hasattr(self.model.octo_transformer, "observation_tokenizers"):
-                    for tokenizer in self.model.octo_transformer.observation_tokenizers.values():
-                        for param in tokenizer.parameters():
-                            param.requires_grad = False
+            # Freeze vision encoder components in the transformer
+            if self.config.freeze_vision_encoder and hasattr(
+                self.model.octo_transformer, "observation_tokenizers"
+            ):
+                for tokenizer in self.model.octo_transformer.observation_tokenizers.values():
+                    for param in tokenizer.parameters():
+                        param.requires_grad = False
 
     def get_optim_params(self) -> dict:
         """Return only parameters that require gradients for optimization."""
@@ -233,10 +226,7 @@ class OctoPolicy(PreTrainedPolicy):
 
         batch_size = image_primary.shape[0]
 
-        if ACTION in batch:
-            raw_actions = batch[ACTION].to(device)
-        else:
-            raw_actions = None
+        raw_actions = batch[ACTION].to(device) if ACTION in batch else None
 
         if raw_tasks is None:
             raw_tasks = [""] * batch_size
@@ -359,7 +349,7 @@ class OctoPolicy(PreTrainedPolicy):
             tasks["pad_mask_dict"].update(
                 {
                     k: torch.zeros(batch_size, dtype=torch.bool, device=device)
-                    for k in tasks.keys()
+                    for k in tasks
                     if k != "pad_mask_dict"
                 }
             )
@@ -395,9 +385,6 @@ class OctoPolicy(PreTrainedPolicy):
         # Get actions from model
         actions = self.model(observations, tasks, timestep_pad_mask)
 
-        # Unnormalize actions
-        actions = self.unnormalize_outputs({ACTION: actions})[ACTION]
-
         return actions
 
     @torch.no_grad()
@@ -430,7 +417,7 @@ class OctoPolicy(PreTrainedPolicy):
 
             # actions shape is [batch_size, n_action_steps, action_dim]
             # We need to queue up actions for each sample in the batch
-            batch_size = actions.shape[0]
+            # batch_size = actions.shape[0] # Not used currently
 
             # For now, just return the first action from the chunk
             # In a real implementation, you'd want to handle the queue per sample
