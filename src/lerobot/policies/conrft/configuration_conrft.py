@@ -21,13 +21,13 @@ import numpy as np
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
-from lerobot.constants import ACTION, OBS_IMAGE, OBS_STATE
 from lerobot.optim.optimizers import MultiAdamConfig
 from lerobot.policies.sac.configuration_sac import (
     ActorLearnerConfig,
     ConcurrencyConfig,
     CriticNetworkConfig,
 )
+from lerobot.utils.constants import ACTION, OBS_IMAGE, OBS_STATE
 
 
 def is_image_feature(key: str) -> bool:

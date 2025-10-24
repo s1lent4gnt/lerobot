@@ -37,18 +37,10 @@ import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
-from lerobot.constants import ACTION
 from lerobot.policies.conrft.configuration_conrft import ConRFTConfig
-from lerobot.policies.normalize import NormalizeBuffer, UnnormalizeBuffer
 from lerobot.policies.octo.modeling_octo import OctoPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.sac.modeling_sac import (
-    MLP,
-    CriticEnsemble,
-    CriticHead,
-    SACObservationEncoder,
-    _convert_normalization_params_to_tensor,
-)
+from lerobot.policies.sac.modeling_sac import MLP, CriticEnsemble, CriticHead, SACObservationEncoder
 from lerobot.policies.utils import get_device_from_parameters
 
 
@@ -77,7 +69,6 @@ class ConRFTPolicy(PreTrainedPolicy):
 
         # Determine action dimension and initialize all components
         continuous_action_dim = config.output_features["action"].shape[0]
-        self._init_normalization(dataset_stats)
         self._init_octo_policy()
         self._init_encoders()
         self._init_consistency_policy(continuous_action_dim)
@@ -87,24 +78,6 @@ class ConRFTPolicy(PreTrainedPolicy):
         self.training_stage = "offline"
         self.bc_weight = config.bc_weight_offline
         self.q_weight = config.q_weight_offline
-
-    def _init_normalization(self, dataset_stats):
-        """Initialize input/output normalization modules."""
-        self.normalize_inputs = nn.Identity()
-        self.normalize_targets = nn.Identity()
-        self.unnormalize_outputs = nn.Identity()
-        if self.config.dataset_stats is not None:
-            params = _convert_normalization_params_to_tensor(self.config.dataset_stats)
-            self.normalize_inputs = NormalizeBuffer(
-                self.config.input_features, self.config.normalization_mapping, params
-            )
-            stats = dataset_stats or params
-            self.normalize_targets = NormalizeBuffer(
-                self.config.output_features, self.config.normalization_mapping, stats
-            )
-            self.unnormalize_outputs = UnnormalizeBuffer(
-                self.config.output_features, self.config.normalization_mapping, stats
-            )
 
     def _init_octo_policy(self):
         """Initialize Octo VLA policy."""
@@ -116,7 +89,7 @@ class ConRFTPolicy(PreTrainedPolicy):
 
     def _init_encoders(self):
         """Initialize shared or separate encoders for consistency policy and critic."""
-        self.encoder_critic = SACObservationEncoder(self.config, self.normalize_inputs)
+        self.encoder_critic = SACObservationEncoder(self.config)
         self.encoder_actor = OctoEncodingWrapper(
             self.octo_policy,
             use_proprio=self.config.use_proprio,
@@ -159,9 +132,7 @@ class ConRFTPolicy(PreTrainedPolicy):
             )
             for _ in range(self.config.num_critics)
         ]
-        self.critic_ensemble = CriticEnsemble(
-            encoder=self.encoder_critic, ensemble=heads, output_normalization=self.normalize_targets
-        )
+        self.critic_ensemble = CriticEnsemble(encoder=self.encoder_critic, ensemble=heads)
 
         target_heads = [
             CriticHead(
@@ -170,15 +141,12 @@ class ConRFTPolicy(PreTrainedPolicy):
             )
             for _ in range(self.config.num_critics)
         ]
-        self.critic_ensemble_target = CriticEnsemble(
-            encoder=self.encoder_critic, ensemble=target_heads, output_normalization=self.normalize_targets
-        )
+        self.critic_ensemble_target = CriticEnsemble(encoder=self.encoder_critic, ensemble=target_heads)
         self.critic_ensemble_target.load_state_dict(self.critic_ensemble.state_dict())
 
         if self.config.use_torch_compile:
             self.critic_ensemble = torch.compile(self.critic_ensemble)
             self.critic_ensemble_target = torch.compile(self.critic_ensemble_target)
-
 
     def _encode_state(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Encode observations into state representation using VLA"""
@@ -410,7 +378,9 @@ class ConRFTPolicy(PreTrainedPolicy):
         flat_actions = all_sampled_actions.reshape(-1, all_sampled_actions.shape[-1])
 
         if observation_features is not None:
-            expanded_obs_features = {k: torch.repeat_interleave(v, num_actions, dim=0) for k, v in observation_features.items()}
+            expanded_obs_features = {
+                k: torch.repeat_interleave(v, num_actions, dim=0) for k, v in observation_features.items()
+            }
         else:
             expanded_obs_features = None
 
@@ -554,7 +524,7 @@ class SinusoidalPosEmb(nn.Module):
         # Precompute the embedding frequencies
         emb = torch.log(torch.tensor(10000.0)) / (half_dim - 1)
         emb = torch.exp(torch.arange(half_dim, dtype=torch.float) * -emb)
-        self.register_buffer('emb', emb)
+        self.register_buffer("emb", emb)
 
     def forward(self, time):
         embeddings = time[:, None] * self.emb

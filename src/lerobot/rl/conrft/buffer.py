@@ -24,6 +24,7 @@ import torch.nn.functional as F  # noqa: N812
 from tqdm import tqdm
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.utils.constants import ACTION, DONE, OBS_IMAGE, REWARD
 from lerobot.utils.transition import Transition
 
 
@@ -175,7 +176,7 @@ class ReplayBuffer:
                     self.complementary_info[key] = torch.empty(
                         (self.capacity, *value_shape), device=self.storage_device
                     )
-                elif isinstance(value, (int, float)):
+                elif isinstance(value, (int | float)):
                     # Handle scalar values similar to reward
                     self.complementary_info[key] = torch.empty((self.capacity,), device=self.storage_device)
                 else:
@@ -222,7 +223,7 @@ class ReplayBuffer:
                     value = complementary_info[key]
                     if isinstance(value, torch.Tensor):
                         self.complementary_info[key][self.position].copy_(value.squeeze(dim=0))
-                    elif isinstance(value, (int, float)):
+                    elif isinstance(value, (int | float)):
                         self.complementary_info[key][self.position] = value
 
         self.position = (self.position + 1) % self.capacity
@@ -240,7 +241,7 @@ class ReplayBuffer:
         idx = torch.randint(low=0, high=high, size=(batch_size,), device=self.storage_device)
 
         # Identify image keys that need augmentation
-        image_keys = [k for k in self.states if k.startswith("observation.image")] if self.use_drq else []
+        image_keys = [k for k in self.states if k.startswith(OBS_IMAGE)] if self.use_drq else []
 
         # Create batched state and next_state
         batch_state = {}
@@ -460,7 +461,7 @@ class ReplayBuffer:
         if list_transition:
             first_transition = list_transition[0]
             first_state = {k: v.to(device) for k, v in first_transition["state"].items()}
-            first_action = first_transition["action"].to(device)
+            first_action = first_transition[ACTION].to(device)
 
             # Get complementary info if available
             first_complementary_info = None
@@ -485,9 +486,11 @@ class ReplayBuffer:
                 elif isinstance(v, torch.Tensor):
                     data[k] = v.to(storage_device)
 
+            action = data[ACTION]
+
             replay_buffer.add(
                 state=data["state"],
-                action=data["action"],
+                action=action,
                 reward=data["reward"],
                 next_state=data["next_state"],
                 done=data["done"],
@@ -521,12 +524,12 @@ class ReplayBuffer:
 
         # Add "action"
         sample_action = self.actions[0]
-        act_info = guess_feature_info(t=sample_action, name="action")
-        features["action"] = act_info
+        act_info = guess_feature_info(t=sample_action, name=ACTION)
+        features[ACTION] = act_info
 
         # Add "reward" and "done"
-        features["next.reward"] = {"dtype": "float32", "shape": (1,)}
-        features["next.done"] = {"dtype": "bool", "shape": (1,)}
+        features[REWARD] = {"dtype": "float32", "shape": (1,)}
+        features[DONE] = {"dtype": "bool", "shape": (1,)}
 
         # Add state keys
         for key in self.states:
@@ -557,10 +560,7 @@ class ReplayBuffer:
         lerobot_dataset.start_image_writer(num_processes=0, num_threads=3)
 
         # Convert transitions into episodes and frames
-        episode_index = 0
-        lerobot_dataset.episode_buffer = lerobot_dataset.create_episode_buffer(episode_index=episode_index)
 
-        frame_idx_in_episode = 0
         for idx in range(self.size):
             actual_idx = (self.position - self.size + idx) % self.capacity
 
@@ -571,9 +571,10 @@ class ReplayBuffer:
                 frame_dict[key] = self.states[key][actual_idx].cpu()
 
             # Fill action, reward, done
-            frame_dict["action"] = self.actions[actual_idx].cpu()
-            frame_dict["next.reward"] = torch.tensor([self.rewards[actual_idx]], dtype=torch.float32).cpu()
-            frame_dict["next.done"] = torch.tensor([self.dones[actual_idx]], dtype=torch.bool).cpu()
+            frame_dict[ACTION] = self.actions[actual_idx].cpu()
+            frame_dict[REWARD] = torch.tensor([self.rewards[actual_idx]], dtype=torch.float32).cpu()
+            frame_dict[DONE] = torch.tensor([self.dones[actual_idx]], dtype=torch.bool).cpu()
+            frame_dict["task"] = task_name
 
             # Add complementary_info if available
             if self.has_complementary_info:
@@ -589,25 +590,18 @@ class ReplayBuffer:
                         frame_dict[f"complementary_info.{key}"] = val
 
             # Add to the dataset's buffer
-            lerobot_dataset.add_frame(frame_dict, task=task_name)
-
-            # Move to next frame
-            frame_idx_in_episode += 1
+            lerobot_dataset.add_frame(frame_dict)
 
             # If we reached an episode boundary, call save_episode, reset counters
             if self.dones[actual_idx] or self.truncateds[actual_idx]:
                 lerobot_dataset.save_episode()
-                episode_index += 1
-                frame_idx_in_episode = 0
-                lerobot_dataset.episode_buffer = lerobot_dataset.create_episode_buffer(
-                    episode_index=episode_index
-                )
 
         # Save any remaining frames in the buffer
         if lerobot_dataset.episode_buffer["size"] > 0:
             lerobot_dataset.save_episode()
 
         lerobot_dataset.stop_image_writer()
+        lerobot_dataset.finalize()
 
         return lerobot_dataset
 
@@ -649,7 +643,7 @@ class ReplayBuffer:
 
         # Check if the dataset has "next.done" key
         sample = dataset[0]
-        has_done_key = "next.done" in sample
+        has_done_key = DONE in sample
 
         # Check for complementary_info keys
         complementary_info_keys = [key for key in sample if key.startswith("complementary_info.")]
@@ -673,14 +667,14 @@ class ReplayBuffer:
                 current_state["action_embedding"] = current_sample["action_embedding"].unsqueeze(0)
 
             # ----- 2) Action -----
-            action = current_sample["action"].unsqueeze(0)  # Add batch dimension
+            action = current_sample[ACTION].unsqueeze(0)  # Add batch dimension
 
             # ----- 3) Reward and done -----
-            reward = float(current_sample["next.reward"].item())  # ensure float
+            reward = float(current_sample[REWARD].item())  # ensure float
 
             # Determine done flag - use next.done if available, otherwise infer from episode boundaries
             if has_done_key:
-                done = bool(current_sample["next.done"].item())  # ensure bool
+                done = bool(current_sample[DONE].item())  # ensure bool
             else:
                 # If this is the last frame or if next frame is in a different episode, mark as done
                 done = False
@@ -797,8 +791,8 @@ def concatenate_batch_transitions(
     }
 
     # Concatenate basic fields
-    left_batch_transitions["action"] = torch.cat(
-        [left_batch_transitions["action"], right_batch_transition["action"]], dim=0
+    left_batch_transitions[ACTION] = torch.cat(
+        [left_batch_transitions[ACTION], right_batch_transition[ACTION]], dim=0
     )
     left_batch_transitions["reward"] = torch.cat(
         [left_batch_transitions["reward"], right_batch_transition["reward"]], dim=0

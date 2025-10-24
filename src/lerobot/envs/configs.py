@@ -199,6 +199,14 @@ class HILSerlProcessorConfig:
     max_gripper_pos: float | None = 100.0
 
 
+@dataclass
+class EmbeddingConfig:
+    """Configuration for action embedding computation."""
+
+    compute_embeddings: bool = True
+    embedding_dim: int = 384
+
+
 @EnvConfig.register_subclass(name="gym_manipulator")
 @dataclass
 class HILSerlRobotEnvConfig(EnvConfig):
@@ -207,6 +215,7 @@ class HILSerlRobotEnvConfig(EnvConfig):
     robot: RobotConfig | None = None
     teleop: TeleoperatorConfig | None = None
     processor: HILSerlProcessorConfig = field(default_factory=HILSerlProcessorConfig)
+    embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
 
     name: str = "real_robot"
 

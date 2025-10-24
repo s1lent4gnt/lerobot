@@ -480,6 +480,11 @@ class SACObservationEncoder(nn.Module):
         if not self.has_images:
             return
 
+        self.has_same_size_images = all(
+            self.config.input_features[self.image_keys[0]].shape == self.config.input_features[k].shape
+            for k in self.image_keys
+        )
+
         if self.config.vision_encoder_name is not None:
             self.image_encoder = PretrainedImageEncoder(self.config)
         else:
@@ -488,15 +493,16 @@ class SACObservationEncoder(nn.Module):
         if self.config.freeze_vision_encoder:
             freeze_image_encoder(self.image_encoder)
 
-        dummy = torch.zeros(1, *self.config.input_features[self.image_keys[0]].shape)
-        with torch.no_grad():
-            _, channels, height, width = self.image_encoder(dummy).shape
-
         self.spatial_embeddings = nn.ModuleDict()
         self.post_encoders = nn.ModuleDict()
 
+        # Initialize spatial embeddings for each image key separately to handle different sizes
         for key in self.image_keys:
             name = key.replace(".", "_")
+            # Create dummy input with the specific shape for this image key
+            dummy = torch.zeros(1, *self.config.input_features[key].shape)
+            with torch.no_grad():
+                _, channels, height, width = self.image_encoder(dummy).shape
             self.spatial_embeddings[name] = SpatialLearnedEmbeddings(
                 height=height,
                 width=width,
@@ -583,6 +589,15 @@ class SACObservationEncoder(nn.Module):
         Returns:
             Dictionary mapping image keys to their corresponding encoded features
         """
+        if not self.has_same_size_images:
+            # Process each image separately to handle different sizes
+            cached_features = {}
+            for key in self.image_keys:
+                image_tensor = obs[key]
+                encoded_features = self.image_encoder(image_tensor)
+                cached_features[key] = encoded_features
+            return cached_features
+
         batched = torch.cat([obs[k] for k in self.image_keys], dim=0)
         out = self.image_encoder(batched)
         chunks = torch.chunk(out, len(self.image_keys), dim=0)

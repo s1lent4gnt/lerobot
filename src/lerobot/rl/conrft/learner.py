@@ -25,7 +25,7 @@ Examples of usage:
 
 - Start a learner server for training:
 ```bash
-python -m lerobot.scripts.rl.conrft.learner --config_path src/lerobot/configs/train_config_hilserl_so100.json
+python -m lerobot.rl.conrft.learner --config_path src/lerobot/configs/train_config_hilserl_so100.json
 ```
 
 **NOTE**: Start the learner server before launching the actor server. The learner opens a gRPC server
@@ -62,20 +62,16 @@ from torch.optim.optimizer import Optimizer
 from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
 from lerobot.configs.train import TrainRLServerPipelineConfig
-from lerobot.constants import (
-    CHECKPOINTS_DIR,
-    LAST_CHECKPOINT_LINK,
-    PRETRAINED_MODEL_DIR,
-    TRAINING_STATE_DIR,
-)
 from lerobot.datasets.factory import make_dataset
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.conrft.modeling_conrft import ConRFTPolicy
 from lerobot.policies.factory import make_policy
 from lerobot.policies.sac.modeling_sac import SACPolicy
+from lerobot.rl import learner_service
+from lerobot.rl.conrft.buffer import ReplayBuffer, concatenate_batch_transitions
+from lerobot.rl.process import ProcessSignalHandler
+from lerobot.rl.wandb_utils import WandBLogger
 from lerobot.robots import so100_follower  # noqa: F401
-from lerobot.scripts.rl import learner_service
-from lerobot.scripts.rl.conrft.buffer import ReplayBuffer, concatenate_batch_transitions
 from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
 from lerobot.transport import services_pb2_grpc
 from lerobot.transport.utils import (
@@ -84,7 +80,12 @@ from lerobot.transport.utils import (
     bytes_to_transitions,
     state_to_bytes,
 )
-from lerobot.utils.process import ProcessSignalHandler
+from lerobot.utils.constants import (
+    CHECKPOINTS_DIR,
+    LAST_CHECKPOINT_LINK,
+    PRETRAINED_MODEL_DIR,
+    TRAINING_STATE_DIR,
+)
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
@@ -98,7 +99,6 @@ from lerobot.utils.utils import (
     get_safe_torch_device,
     init_logging,
 )
-from lerobot.utils.wandb_utils import WandBLogger
 
 LOG_PREFIX = "[LEARNER]"
 
@@ -157,7 +157,7 @@ def train(cfg: TrainRLServerPipelineConfig, job_name: str | None = None):
 
     # Setup WandB logging if enabled
     if cfg.wandb.enable and cfg.wandb.project:
-        from lerobot.utils.wandb_utils import WandBLogger
+        from lerobot.rl.wandb_utils import WandBLogger
 
         wandb_logger = WandBLogger(cfg)
     else:
@@ -1172,12 +1172,8 @@ def get_observation_features(
 
         # Cache critic image features
         with torch.no_grad():
-            observation_features = policy.encoder_critic.get_cached_image_features(
-                observations, normalize=False
-            )
-            next_observation_features = policy.encoder_critic.get_cached_image_features(
-                next_observations, normalize=False
-            )
+            observation_features = policy.encoder_critic.get_cached_image_features(observations)
+            next_observation_features = policy.encoder_critic.get_cached_image_features(next_observations)
 
         return observation_features, next_observation_features
 
@@ -1411,7 +1407,8 @@ def run_conrft_offline_training(
     )
 
     # Training loop
-    for step in range(optimization_step, offline_steps):
+    step = optimization_step
+    for _ in range(optimization_step, offline_steps):
         # Exit if shutdown requested
         if shutdown_event is not None and shutdown_event.is_set():
             logging.info("[LEARNER] Shutdown signal received during offline training. Exiting...")
@@ -1582,6 +1579,7 @@ def run_conrft_offline_training(
                 custom_step_key="Optimization step",
             )
 
+        step += 1
         # Logging
         if step % log_freq == 0:
             training_infos["offline_replay_buffer_size"] = len(offline_replay_buffer)
@@ -1597,7 +1595,7 @@ def run_conrft_offline_training(
                 wandb_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")
 
         # Save checkpoint
-        if cfg.save_checkpoint and (step % save_freq == 0 or step == offline_steps - 1):
+        if cfg.save_checkpoint and (step % save_freq == 0 or step == offline_steps):
             save_training_checkpoint(
                 cfg=cfg,
                 optimization_step=step,
