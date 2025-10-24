@@ -21,7 +21,7 @@ def calc_return_to_go(rewards, terminals, gamma, reward_scale, reward_bias, rewa
         """
         If the env has sparse reward and the trajectory is all negative rewards,
         we use r / (1-gamma) as return to go.
-        For exapmle, if gamma = 0.99 and the rewards = [-1, -1, -1],
+        For example, if gamma = 0.99 and the rewards = [-1, -1, -1],
         then return_to_go = [-100, -100, -100]
         """
         return_to_go = [float(reward_neg / (1 - gamma))] * len(rewards)

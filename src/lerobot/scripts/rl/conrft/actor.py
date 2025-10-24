@@ -60,10 +60,12 @@ from torch.multiprocessing import Event, Queue
 from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
 from lerobot.configs.train import TrainRLServerPipelineConfig
+from lerobot.policies.conrft.modeling_conrft import ConRFTPolicy
 from lerobot.policies.factory import make_policy
 from lerobot.policies.sac.modeling_sac import SACPolicy
 from lerobot.robots import so100_follower  # noqa: F401
-from lerobot.scripts.rl.gym_manipulator import make_robot_env
+from lerobot.scripts.rl.conrft.data_util import add_mc_returns_to_trajectory
+from lerobot.scripts.rl.conrft.gym_manipulator import make_robot_env
 from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
 from lerobot.transport import services_pb2, services_pb2_grpc
 from lerobot.transport.utils import (
@@ -228,7 +230,7 @@ def act_with_policy(
     """
     # Initialize logging for multiprocessing
     if not use_threads(cfg):
-        log_dir = os.path.join(cfg.output_dir, "logs")
+        log_dir = os.path.join(cfg.output_dir, "logs")  # noqa: F823
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, f"actor_policy_{os.getpid()}.log")
         init_logging(log_file=log_file, display_pid=True)
@@ -247,12 +249,34 @@ def act_with_policy(
     logging.info("make_policy")
 
     ### Instantiate the policy in both the actor and learner processes
-    ### To avoid sending a SACPolicy object through the port, we create a policy instance
+    ### To avoid sending a SACPolicy/ConRFTPolicy object through the port, we create a policy instance
     ### on both sides, the learner sends the updated parameters every n steps to update the actor's parameters
-    policy: SACPolicy = make_policy(
+    policy: SACPolicy | ConRFTPolicy = make_policy(
         cfg=cfg.policy,
         env_cfg=cfg.env,
     )
+
+    # Load from pretrained checkpoint if specified (for online training after offline training)
+    if hasattr(cfg.policy, "pretrained_model_path") and cfg.policy.pretrained_model_path is not None:
+        import os
+
+        pretrained_path = cfg.policy.pretrained_model_path
+        if os.path.exists(pretrained_path):
+            logging.info(f"Loading pretrained policy from: {pretrained_path}")
+            try:
+                # Load the pretrained policy using from_pretrained
+                pretrained_policy = ConRFTPolicy.from_pretrained(pretrained_path)
+
+                # Copy the state dict from pretrained policy to current policy
+                policy.load_state_dict(pretrained_policy.state_dict(), strict=True)
+                logging.info("Successfully loaded pretrained policy weights")
+            except Exception as e:
+                logging.warning(f"Failed to load pretrained policy: {e}")
+                logging.info("Continuing with randomly initialized policy")
+        else:
+            logging.warning(f"Pretrained model path does not exist: {pretrained_path}")
+            logging.info("Continuing with randomly initialized policy")
+
     policy = policy.eval()
     assert isinstance(policy, nn.Module)
 
@@ -260,11 +284,12 @@ def act_with_policy(
 
     # NOTE: For the moment we will solely handle the case of a single environment
     sum_reward_episode = 0
-    list_transition_to_send_to_learner = []
+    # list_transition_to_send_to_learner = []
     episode_intervention = False
     # Add counters for intervention rate calculation
     episode_intervention_steps = 0
     episode_total_steps = 0
+    trajectory = []  # To store transitions for MC returns calculation
 
     policy_timer = TimerManager("Policy inference", log=False)
 
@@ -274,16 +299,27 @@ def act_with_policy(
             logging.info("[ACTOR] Shutting down act_with_policy")
             return
 
+        # Initialize action embedding as None
+        current_action_embedding = None
+
         if interaction_step >= cfg.policy.online_step_before_learning:
             # Time policy inference and check if it meets FPS requirement
             with policy_timer:
-                action = policy.select_action(batch=obs)
-            policy_fps = policy_timer.fps_last
+                if isinstance(policy, ConRFTPolicy) and hasattr(policy, "select_action_with_embedding"):
+                    action, current_action_embedding = policy.select_action_with_embedding(batch=obs)
+                    if current_action_embedding is not None:
+                        current_action_embedding = current_action_embedding.cpu()
+                else:
+                    action = policy.select_action(batch=obs)
+            # policy_fps = policy_timer.fps_last
 
-            log_policy_frequency_issue(policy_fps=policy_fps, cfg=cfg, interaction_step=interaction_step)
+            # log_policy_frequency_issue(policy_fps=policy_fps, cfg=cfg, interaction_step=interaction_step)
 
         else:
-            action = online_env.action_space.sample()
+            action, current_action_embedding = policy.select_action_with_embedding(batch=obs)
+            if current_action_embedding is not None:
+                current_action_embedding = current_action_embedding.cpu()
+            # action = online_env.action_space.sample()
 
         next_obs, reward, done, truncated, info = online_env.step(action)
 
@@ -300,31 +336,46 @@ def act_with_policy(
             # Increment intervention steps counter
             episode_intervention_steps += 1
 
-        list_transition_to_send_to_learner.append(
-            Transition(
-                state=obs,
-                action=action,
-                reward=reward,
-                next_state=next_obs,
-                done=done,
-                truncated=truncated,  # TODO: (azouitine) Handle truncation properly
-                complementary_info=info,
-            )
+        # Add action embedding to state dictionary if available
+        state_with_embedding = obs.copy()
+        if current_action_embedding is not None:
+            state_with_embedding["action_embedding"] = current_action_embedding
+
+        transition = Transition(
+            state=state_with_embedding,
+            action=action,
+            reward=reward,
+            next_state=next_obs,  # next_action_embeddings will be added later by add_next_embeddings_to_trajectory
+            done=done,
+            truncated=truncated,  # TODO: (azouitine) Handle truncation properly
+            complementary_info=info,
         )
+        trajectory.append(transition)
         # assign obs to the next obs and continue the rollout
         obs = next_obs
 
         if done or truncated:
             logging.info(f"[ACTOR] Global step {interaction_step}: Episode reward: {sum_reward_episode}")
 
+            # Calculate MC returns and next action embeddings for the completed trajectory
+            if cfg.policy.use_mc_returns:
+                trajectory = add_mc_returns_to_trajectory(
+                    trajectory,
+                    gamma=cfg.policy.discount,
+                    reward_scale=cfg.policy.reward_scale,
+                    reward_bias=cfg.policy.reward_bias,
+                    reward_neg=cfg.policy.reward_neg,
+                    is_sparse_reward=cfg.policy.is_sparse_reward,
+                )
+
             update_policy_parameters(policy=policy, parameters_queue=parameters_queue, device=device)
 
-            if len(list_transition_to_send_to_learner) > 0:
+            if len(trajectory) > 0:
                 push_transitions_to_transport_queue(
-                    transitions=list_transition_to_send_to_learner,
+                    transitions=trajectory,
                     transitions_queue=transitions_queue,
                 )
-                list_transition_to_send_to_learner = []
+                trajectory = []  # Clear trajectory after sending
 
             stats = get_frequency_stats(policy_timer)
             policy_timer.reset()
@@ -611,7 +662,7 @@ def interactions_stream(
 #################################################
 
 
-def update_policy_parameters(policy: SACPolicy, parameters_queue: Queue, device):
+def update_policy_parameters(policy: SACPolicy | ConRFTPolicy, parameters_queue: Queue, device):
     bytes_state_dict = get_last_item_from_queue(parameters_queue, block=False)
     if bytes_state_dict is not None:
         logging.info("[ACTOR] Load new parameters from Learner.")
@@ -627,9 +678,16 @@ def update_policy_parameters(policy: SACPolicy, parameters_queue: Queue, device)
         # - Skip encoder params entirely when freeze_vision_encoder=True
         # - Ensure discrete_critic gets correct encoder state (currently uses encoder_critic)
 
-        # Load actor state dict
-        actor_state_dict = move_state_dict_to_device(state_dicts["policy"], device=device)
-        policy.actor.load_state_dict(actor_state_dict)
+        # Load policy state dict - handle both SAC and ConRFT policies
+        policy_state_dict = move_state_dict_to_device(state_dicts["policy"], device=device)
+
+        if isinstance(policy, ConRFTPolicy):
+            # The encoder is not sent by the learner, so we load with strict=False.
+            policy.consistency_policy.load_state_dict(policy_state_dict, strict=False)
+            logging.info("[ACTOR] Loaded ConRFT consistency policy parameters from Learner.")
+        else:
+            policy.actor.load_state_dict(policy_state_dict)
+            logging.info("[ACTOR] Loaded SAC actor parameters from Learner.")
 
         # Load discrete critic if present
         if hasattr(policy, "discrete_critic") and "discrete_critic" in state_dicts:
