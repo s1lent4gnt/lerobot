@@ -475,6 +475,10 @@ def add_actor_information_and_train(
                     next_observations=next_observations,
                 )
 
+                # Use precomputed action embeddings from recorded dataset (now in state)
+                action_embeddings = observations.get("action_embedding")
+                next_action_embeddings = next_observations.get("action_embedding")
+
                 # Create a batch dictionary with all required elements for the forward method
                 forward_batch = {
                     "state": observations,
@@ -486,6 +490,8 @@ def add_actor_information_and_train(
                     "next_state": next_observations,
                     "observation_feature": observation_features,
                     "next_observation_feature": next_observation_features,
+                    "action_embeddings": action_embeddings,
+                    "next_action_embeddings": next_action_embeddings,
                     "complementary_info": batch.get("complementary_info"),
                 }
 
@@ -569,6 +575,10 @@ def add_actor_information_and_train(
                 next_observations=next_observations,
             )
 
+            # Use precomputed action embeddings from recorded dataset (now in state)
+            action_embeddings = observations.get("action_embedding")
+            next_action_embeddings = next_observations.get("action_embedding")
+
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
                 "state": observations,
@@ -580,6 +590,8 @@ def add_actor_information_and_train(
                 "next_state": next_observations,
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
+                "action_embeddings": action_embeddings,
+                "next_action_embeddings": next_action_embeddings,
                 "complementary_info": batch.get("complementary_info"),
             }
 
@@ -804,6 +816,10 @@ def add_actor_information_and_train(
                 policy=policy, observations=observations, next_observations=next_observations
             )
 
+            # Use precomputed action embeddings from recorded dataset (now in state)
+            action_embeddings = observations.get("action_embedding")
+            next_action_embeddings = next_observations.get("action_embedding")
+
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
                 ACTION: actions,
@@ -816,6 +832,8 @@ def add_actor_information_and_train(
                 # "done": done,
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
+                "action_embeddings": action_embeddings,
+                "next_action_embeddings": next_action_embeddings,
                 "complementary_info": batch["complementary_info"],
             }
 
@@ -891,6 +909,10 @@ def add_actor_information_and_train(
             policy=policy, observations=observations, next_observations=next_observations
         )
 
+        # Use precomputed action embeddings from recorded dataset (now in state)
+        action_embeddings = observations.get("action_embedding")
+        next_action_embeddings = next_observations.get("action_embedding")
+
         # Create a batch dictionary with all required elements for the forward method
         forward_batch = {
             ACTION: actions,
@@ -903,6 +925,8 @@ def add_actor_information_and_train(
             # "done": done,
             "observation_feature": observation_features,
             "next_observation_feature": next_observation_features,
+            "action_embeddings": action_embeddings,
+            "next_action_embeddings": next_action_embeddings,
         }
 
         critic_output = policy.forward(forward_batch, model="critic")
@@ -1345,14 +1369,16 @@ def get_observation_features(
     if policy.config.vision_encoder_name is None or not policy.config.freeze_vision_encoder:
         return None, None
 
+    # Cache critic image features
     with torch.no_grad():
-        observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(observations)
-        next_observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(
-            next_observations
+        observation_features = policy.encoder_critic.get_cached_image_features(
+            observations, normalize=False
+        )
+        next_observation_features = policy.encoder_critic.get_cached_image_features(
+            next_observations, normalize=False
         )
 
     return observation_features, next_observation_features
-
 
 def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
     logging.debug("[LEARNER] Pushing actor policy to the queue")

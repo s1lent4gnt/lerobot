@@ -18,6 +18,7 @@ from typing import Any
 
 import draccus
 
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig

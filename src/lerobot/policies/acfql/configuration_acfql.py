@@ -157,6 +157,19 @@ class ACFQLConfig(PreTrainedConfig):
     # Frequency of policy updates
     policy_update_freq: int = 1
 
+    # Octo model parameters
+    # Required VLA model (ConRFT always uses Octo)
+    base_vla_model_path: str = "lilkm/octo-small-test"
+    freeze_base_vla: bool = True
+
+    # Pretrained policy checkpoint path (for loading from offline training)
+    # pretrained_model_path: str | None = None
+
+    # Proprioception settings
+    use_proprio: bool = True
+    proprio_latent_dim: int = 64
+    state_dim: int = 18
+
     # ACFQL algorithm parameters
     # Discount factor for the ACFQL algorithm
     discount: float = 0.99

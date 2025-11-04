@@ -360,7 +360,10 @@ def act_with_policy(
         # Time policy inference and check if it meets FPS requirement
         with policy_timer:
             # Extract observation from transition for policy
-            action = policy.select_action(batch=observation_for_inference)
+            # action = policy.select_action(batch=observation_for_inference)
+            action, current_action_embedding = policy.select_action_with_embedding(observations=obs)  # [h, A]
+            if current_action_embedding is not None:
+                current_action_embedding = current_action_embedding.cpu()
         policy_fps = policy_timer.fps_last
 
         action = postprocessor(action)

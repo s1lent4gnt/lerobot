@@ -100,27 +100,20 @@ class ReplayBufferNSteps(ReplayBuffer):
                 next_indices = (idx + n_steps) % self.capacity
                 batch_next_state_nsteps[key] = self.states[key][next_indices].to(self.device)
 
-        # Apply image augmentation in a batched way if needed
+         # Apply image augmentation in a batched way if needed
         if self.use_drq and image_keys:
-            # Concatenate all images from state and next_state
-            all_images = []
+            # TODO(lilkm): check if i can optimize data augmentation here
+            # Apply augmentation to each image key separately to handle different image sizes
             for key in image_keys:
-                all_images.append(batch_state_nsteps[key])
-                all_images.append(batch_next_state_nsteps[key])
+                # Concatenate state and next_state images for this specific key
+                key_images = torch.cat([batch_state_nsteps[key], batch_next_state_nsteps[key]], dim=0)
 
-            # Optimization: Batch all images and apply augmentation once
-            all_images_tensor = torch.cat(all_images, dim=0)
-            augmented_images = self.image_augmentation_function(all_images_tensor)
+                # Apply augmentation to this key's images
+                augmented_key_images = self.image_augmentation_function(key_images)
 
-            for i, k in enumerate(image_keys):
-                # Calculate offsets for the current image key:
-                # For each key, we have 2*batch_size images (batch_size for states, batch_size for next_states)
-                # States start at index i*2*batch_size and take up batch_size slots
-                batch_state_nsteps[k] = augmented_images[i * 2 * batch_size : (i * 2 + 1) * batch_size]
-                # Next states start after the states at index (i*2+1)*batch_size and also take up batch_size slots
-                batch_next_state_nsteps[k] = augmented_images[
-                    (i * 2 + 1) * batch_size : (i * 2 + 2) * batch_size
-                ]
+                # Split back to state and next_state
+                batch_state_nsteps[key] = augmented_key_images[:batch_size]
+                batch_next_state_nsteps[key] = augmented_key_images[batch_size:]
 
         # Sample other tensors sequences
         action_seq = self.actions[indices].to(self.device)
@@ -453,6 +446,10 @@ class ReplayBufferNSteps(ReplayBuffer):
                 val = current_sample[key]
                 current_state[key] = val.unsqueeze(0)  # Add batch dimension
 
+            # Add action embedding to current state if it exists in the dataset
+            if "action_embedding" in current_sample:
+                current_state["action_embedding"] = current_sample["action_embedding"].unsqueeze(0)
+
             # ----- 2) Action -----
             action = current_sample[ACTION].unsqueeze(0)  # Add batch dimension
 
@@ -495,6 +492,10 @@ class ReplayBufferNSteps(ReplayBuffer):
                     for key in state_keys:
                         val = next_sample[key]
                         next_state_data[key] = val.unsqueeze(0)  # Add batch dimension
+
+                    if "action_embedding" in next_sample:
+                        next_state_data["action_embedding"] = next_sample["action_embedding"].unsqueeze(0)
+
                     next_state = next_state_data
 
             # ----- 5) Complementary info (if available) -----
