@@ -513,6 +513,7 @@ def add_actor_information_and_train(
                     actor_onestep_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
                         parameters=policy.actor_onestep_flow.parameters(), max_norm=clip_grad_norm_value
                     ).item()
+                    optimizers["actor_onestep_flow"].step()
 
                     # Add actor info to training info
                     # training_infos["actor_one/loss"] = loss_actor_onestep_flow.item()
