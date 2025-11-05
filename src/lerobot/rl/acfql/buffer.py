@@ -100,7 +100,7 @@ class ReplayBufferNSteps(ReplayBuffer):
                 next_indices = (idx + n_steps) % self.capacity
                 batch_next_state_nsteps[key] = self.states[key][next_indices].to(self.device)
 
-         # Apply image augmentation in a batched way if needed
+        # Apply image augmentation in a batched way if needed
         if self.use_drq and image_keys:
             # TODO(lilkm): check if i can optimize data augmentation here
             # Apply augmentation to each image key separately to handle different image sizes
@@ -446,9 +446,9 @@ class ReplayBufferNSteps(ReplayBuffer):
                 val = current_sample[key]
                 current_state[key] = val.unsqueeze(0)  # Add batch dimension
 
-            # Add action embedding to current state if it exists in the dataset
-            if "action_embedding" in current_sample:
-                current_state["action_embedding"] = current_sample["action_embedding"].unsqueeze(0)
+            # # Add action embedding to current state if it exists in the dataset
+            # if "action_embedding" in current_sample:
+            #     current_state["action_embedding"] = current_sample["action_embedding"].unsqueeze(0)
 
             # ----- 2) Action -----
             action = current_sample[ACTION].unsqueeze(0)  # Add batch dimension
@@ -493,8 +493,8 @@ class ReplayBufferNSteps(ReplayBuffer):
                         val = next_sample[key]
                         next_state_data[key] = val.unsqueeze(0)  # Add batch dimension
 
-                    if "action_embedding" in next_sample:
-                        next_state_data["action_embedding"] = next_sample["action_embedding"].unsqueeze(0)
+                    # if "action_embedding" in next_sample:
+                    #     next_state_data["action_embedding"] = next_sample["action_embedding"].unsqueeze(0)
 
                     next_state = next_state_data
 

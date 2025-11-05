@@ -415,6 +415,11 @@ def add_actor_information_and_train(
                 observations = preprocessor(
                     {
                         **{"observation.state": observations["observation.state"]},
+                        **{
+                            "observation.action_embedding": observations.get("action_embedding")
+                            if "action_embedding" in observations
+                            else None
+                        },
                         # [B, C, H, W] -> [B, H, W, C]
                         **{
                             k: v.permute(0, 2, 3, 1)
@@ -426,6 +431,7 @@ def add_actor_information_and_train(
                 )
 
                 actions = observations.pop("action")
+                action_embeddings = observations.get("observation.action_embedding")
 
                 # The preprocessor may add extra keys, filter them out
                 observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
@@ -441,6 +447,11 @@ def add_actor_information_and_train(
                 next_observations = preprocessor(
                     {
                         **{"observation.state": next_observations["observation.state"]},
+                        **{
+                            "observation.action_embedding": next_observations.get("action_embedding")
+                            if "action_embedding" in next_observations
+                            else None
+                        },
                         # [B, C, H, W] -> [B, H, W, C]
                         **{
                             k: v.permute(0, 2, 3, 1)
@@ -449,6 +460,7 @@ def add_actor_information_and_train(
                         },
                     }
                 )
+                next_action_embeddings = next_observations.get("observation.action_embedding")
                 # The preprocessor may add extra keys, filter them out
                 next_observations = {
                     k: v for k, v in next_observations.items() if k in cfg.policy.input_features
@@ -476,8 +488,8 @@ def add_actor_information_and_train(
                 )
 
                 # Use precomputed action embeddings from recorded dataset (now in state)
-                action_embeddings = observations.get("action_embedding")
-                next_action_embeddings = next_observations.get("action_embedding")
+                # action_embeddings = observations.get("action_embedding")
+                # next_action_embeddings = next_observations.get("action_embedding")
 
                 # Create a batch dictionary with all required elements for the forward method
                 forward_batch = {
@@ -521,6 +533,11 @@ def add_actor_information_and_train(
             observations = preprocessor(
                 {
                     **{"observation.state": observations["observation.state"]},
+                    **{
+                        "observation.action_embedding": observations.get("action_embedding")
+                        if "action_embedding" in observations
+                        else None
+                    },
                     # [B, C, H, W] -> [B, H, W, C]
                     **{
                         k: v.permute(0, 2, 3, 1) for k, v in observations.items() if "observation.images" in k
@@ -530,6 +547,7 @@ def add_actor_information_and_train(
             )
 
             actions = observations.pop("action")
+            action_embeddings = observations.get("observation.action_embedding")
 
             # The preprocessor may add extra keys, filter them out
             observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
@@ -543,6 +561,11 @@ def add_actor_information_and_train(
             next_observations = preprocessor(
                 {
                     **{"observation.state": next_observations["observation.state"]},
+                    **{
+                        "observation.action_embedding": next_observations.get("action_embedding")
+                        if "action_embedding" in next_observations
+                        else None
+                    },
                     # [B, C, H, W] -> [B, H, W, C]
                     **{
                         k: v.permute(0, 2, 3, 1)
@@ -551,6 +574,7 @@ def add_actor_information_and_train(
                     },
                 }
             )
+            next_action_embeddings = next_observations.get("observation.action_embedding")
             # The preprocessor may add extra keys, filter them out
             next_observations = {k: v for k, v in next_observations.items() if k in cfg.policy.input_features}
             next_observations = {
@@ -576,8 +600,8 @@ def add_actor_information_and_train(
             )
 
             # Use precomputed action embeddings from recorded dataset (now in state)
-            action_embeddings = observations.get("action_embedding")
-            next_action_embeddings = next_observations.get("action_embedding")
+            # action_embeddings = observations.get("action_embedding")
+            # next_action_embeddings = next_observations.get("action_embedding")
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
@@ -764,6 +788,11 @@ def add_actor_information_and_train(
             observations = preprocessor(
                 {
                     **{"observation.state": observations["observation.state"]},
+                    **{
+                        "observation.action_embedding": observations.get("action_embedding")
+                        if "action_embedding" in observations
+                        else None
+                    },
                     # [B, C, H, W] -> [B, H, W, C]
                     **{
                         k: v.permute(0, 2, 3, 1) for k, v in observations.items() if "observation.images" in k
@@ -773,6 +802,7 @@ def add_actor_information_and_train(
             )
 
             actions = observations.pop("action")
+            action_embeddings = observations.get("observation.action_embedding")
 
             # The preprocessor may add extra keys, filter them out
             observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
@@ -786,6 +816,11 @@ def add_actor_information_and_train(
             next_observations = preprocessor(
                 {
                     **{"observation.state": next_observations["observation.state"]},
+                    **{
+                        "observation.action_embedding": next_observations.get("action_embedding")
+                        if "action_embedding" in next_observations
+                        else None
+                    },
                     # [B, C, H, W] -> [B, H, W, C]
                     **{
                         k: v.permute(0, 2, 3, 1)
@@ -794,6 +829,7 @@ def add_actor_information_and_train(
                     },
                 }
             )
+            next_action_embeddings = next_observations.get("observation.action_embedding")
             # The preprocessor may add extra keys, filter them out
             next_observations = {k: v for k, v in next_observations.items() if k in cfg.policy.input_features}
             next_observations = {
@@ -817,8 +853,8 @@ def add_actor_information_and_train(
             )
 
             # Use precomputed action embeddings from recorded dataset (now in state)
-            action_embeddings = observations.get("action_embedding")
-            next_action_embeddings = next_observations.get("action_embedding")
+            # action_embeddings = observations.get("action_embedding")
+            # next_action_embeddings = next_observations.get("action_embedding")
 
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
@@ -864,12 +900,18 @@ def add_actor_information_and_train(
         observations = preprocessor(
             {
                 **{"observation.state": observations["observation.state"]},
+                **{
+                    "observation.action_embedding": observations.get("action_embedding")
+                    if "action_embedding" in observations
+                    else None
+                },
                 # [B, C, H, W] -> [B, H, W, C]
                 **{k: v.permute(0, 2, 3, 1) for k, v in observations.items() if "observation.images" in k},
                 **{"action": actions},
             }
         )
         actions = observations.pop("action")
+        action_embeddings = observations.get("observation.action_embedding")
 
         # The preprocessor may add extra keys, filter them out
         observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
@@ -883,6 +925,11 @@ def add_actor_information_and_train(
         next_observations = preprocessor(
             {
                 **{"observation.state": next_observations["observation.state"]},
+                **{
+                    "observation.action_embedding": next_observations.get("action_embedding")
+                    if "action_embedding" in next_observations
+                    else None
+                },
                 # [B, C, H, W] -> [B, H, W, C]
                 **{
                     k: v.permute(0, 2, 3, 1)
@@ -891,6 +938,7 @@ def add_actor_information_and_train(
                 },
             }
         )
+        next_action_embeddings = next_observations.get("observation.action_embedding")
         # The preprocessor may add extra keys, filter them out
         next_observations = {k: v for k, v in next_observations.items() if k in cfg.policy.input_features}
         next_observations = {
@@ -910,8 +958,8 @@ def add_actor_information_and_train(
         )
 
         # Use precomputed action embeddings from recorded dataset (now in state)
-        action_embeddings = observations.get("action_embedding")
-        next_action_embeddings = next_observations.get("action_embedding")
+        # action_embeddings = observations.get("action_embedding")
+        # next_action_embeddings = next_observations.get("action_embedding")
 
         # Create a batch dictionary with all required elements for the forward method
         forward_batch = {
@@ -1371,14 +1419,11 @@ def get_observation_features(
 
     # Cache critic image features
     with torch.no_grad():
-        observation_features = policy.encoder_critic.get_cached_image_features(
-            observations, normalize=False
-        )
-        next_observation_features = policy.encoder_critic.get_cached_image_features(
-            next_observations, normalize=False
-        )
+        observation_features = policy.encoder_critic.get_cached_image_features(observations)
+        next_observation_features = policy.encoder_critic.get_cached_image_features(next_observations)
 
     return observation_features, next_observation_features
+
 
 def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
     logging.debug("[LEARNER] Pushing actor policy to the queue")
