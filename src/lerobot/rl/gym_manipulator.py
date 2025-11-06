@@ -509,6 +509,7 @@ def step_env_and_process_transition(
     action: torch.Tensor,
     env_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
     action_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
+    return_obs: bool = False,
 ) -> EnvTransition:
     """
     Execute one step with processor pipeline.
@@ -551,6 +552,9 @@ def step_env_and_process_transition(
         complementary_data=complementary_data,
     )
     new_transition = env_processor(new_transition)
+
+    if return_obs:
+        return new_transition, obs
 
     return new_transition
 

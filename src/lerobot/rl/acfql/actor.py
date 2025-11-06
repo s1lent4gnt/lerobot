@@ -51,6 +51,7 @@ import os
 import time
 from pprint import pformat
 
+import einops
 import torch
 from torch import nn
 from torch.multiprocessing import Queue
@@ -310,6 +311,57 @@ def act_with_policy(
     transition = create_transition(observation=obs, info=info)
     transition = env_processor(transition)
 
+    precompute_action_embeddings = True
+
+    # TODO(jpizarrom): use processors or move octo preprocessing to processor?
+    def transform_image(img, size, device):
+        img_tensor = torch.from_numpy(img).to(device=device)
+        # Add batch dimension if needed
+        if img_tensor.ndim == 3:
+            img_tensor = img_tensor.unsqueeze(0)
+        img_tensor = einops.rearrange(img_tensor, "b h w c -> b c h w").contiguous()
+        # img_tensor = F.resize(img_tensor, size)
+        return img_tensor
+
+    if precompute_action_embeddings:
+        # TODO(jpizarrom): compute action embeddings for initial observation, so then they are available, and then call encoder only once per step
+        # TODO(jpizarrom): use preprocessor to normalize observations before embedding extraction,
+        observations_for_embedding = {
+            k: v
+            for k, v in transition[TransitionKey.OBSERVATION].items()
+            if k in cfg.policy.input_features and "observation.images" not in k
+        }
+        observations_for_embedding = preprocessor(
+            {
+                **{"observation.state": observations_for_embedding["observation.state"]},
+            }
+        )
+        # The preprocessor may add extra keys, filter them out
+        observations_for_embedding = {
+            k: v for k, v in observations_for_embedding.items() if k in cfg.policy.input_features
+        }
+        # TODO(jpizarrom): use original image [0,255], but it can be better to move octo normalization to processor?
+        observations_for_embedding = {
+            **{"observation.state": observations_for_embedding["observation.state"]},
+            # TODO(jpizarrom): move octo preprocessing to processor?
+            # **{k: v for k, v in transition[TransitionKey.OBSERVATION].items() if "observation.images" in k},
+        }
+        observations_for_embedding["observation.images.front"] = transform_image(
+            obs["pixels"]["front"], (256, 256), device
+        )
+        observations_for_embedding["observation.images.wrist"] = transform_image(
+            obs["pixels"]["wrist"], (128, 128), device
+        )
+        # observations_for_embedding["observation.images.front"] = transition[TransitionKey.OBSERVATION]["observation.images.front"]
+        # observations_for_embedding["observation.images.wrist"] = transition[TransitionKey.OBSERVATION]["observation.images.wrist"]
+
+        with torch.no_grad():
+            action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
+                observations=observations_for_embedding
+            )
+
+        transition[TransitionKey.OBSERVATION]["action_embedding"] = action_embeddings.cpu()
+
     # NOTE: For the moment we will solely handle the case of a single environment
     sum_reward_episode = 0
     list_transition_to_send_to_learner = []
@@ -337,11 +389,22 @@ def act_with_policy(
         observation_for_inference = preprocessor(
             {
                 **{"observation.state": observation["observation.state"]},
+                **{
+                    "observation.action_embedding": observation.get("action_embedding")
+                    if "action_embedding" in observation
+                    else None
+                },
+                # **{
+                #     "observation.action_embedding": observation.get("action_embedding")
+                #     if "action_embedding" in observation
+                #     else None
+                # },
                 # [B, C, H, W] -> [B, H, W, C]
-                **{k: v.permute(0, 2, 3, 1) for k, v in observation.items() if "observation.images" in k},
+                # **{k: v.permute(0, 2, 3, 1) for k, v in observation.items() if "observation.images" in k},
             }
         )
 
+        action_embeddings = observation_for_inference.get("observation.action_embedding")
         # The preprocessor may add extra keys, filter them out
         observation_for_inference = {
             k: v for k, v in observation_for_inference.items() if k in cfg.policy.input_features
@@ -350,20 +413,27 @@ def act_with_policy(
         observation_for_inference = {
             **{"observation.state": observation_for_inference["observation.state"]},
             # [B, H, W, C] -> [B, C, H, W]
-            **{
-                k: v.permute(0, 3, 1, 2)
-                for k, v in observation_for_inference.items()
-                if "observation.images" in k
-            },
+            # **{
+            #     k: v.permute(0, 3, 1, 2)
+            #     for k, v in observation_for_inference.items()
+            #     if "observation.images" in k
+            # },
+            # use original images for octo inference, it does its own preprocessing internally
+            # TODO(jpizarrom): move octo preprocessing to processor?
+            **{k: v for k, v in observation.items() if "observation.images" in k},
         }
+
+        if action_embeddings is not None:
+            observation_for_inference["action_embeddings"] = action_embeddings
 
         # Time policy inference and check if it meets FPS requirement
         with policy_timer:
             # Extract observation from transition for policy
-            # action = policy.select_action(batch=observation_for_inference)
-            action, current_action_embedding = policy.select_action_with_embedding(observations=obs)  # [h, A]
-            if current_action_embedding is not None:
-                current_action_embedding = current_action_embedding.cpu()
+            action = policy.select_action(batch=observation_for_inference)
+            # TODO(jpizarrom): take the embeddings from the transition to avoid recomputing them
+            # action, current_action_embedding = policy.select_action_with_embedding(observations=observation_for_inference)  # [h, A]
+            # if current_action_embedding is not None:
+            #     current_action_embedding = current_action_embedding.cpu()
         policy_fps = policy_timer.fps_last
 
         action = postprocessor(action)
@@ -371,12 +441,13 @@ def act_with_policy(
         log_policy_frequency_issue(policy_fps=policy_fps, cfg=cfg, interaction_step=interaction_step)
 
         # Use the new step function
-        new_transition = step_env_and_process_transition(
+        new_transition, new_obs_original = step_env_and_process_transition(
             env=online_env,
             transition=transition,
             action=action,
             env_processor=env_processor,
             action_processor=action_processor,
+            return_obs=True,
         )
 
         # Extract values from processed transition
@@ -385,6 +456,49 @@ def act_with_policy(
             for k, v in new_transition[TransitionKey.OBSERVATION].items()
             if k in cfg.policy.input_features
         }
+
+        if precompute_action_embeddings:
+            observations_for_embedding = {
+                k: v
+                for k, v in new_transition[TransitionKey.OBSERVATION].items()
+                if k in cfg.policy.input_features and "observation.images" not in k
+            }
+            observations_for_embedding = preprocessor(
+                {
+                    **{"observation.state": observations_for_embedding["observation.state"]},
+                }
+            )
+            # The preprocessor may add extra keys, filter them out
+            observations_for_embedding = {
+                k: v for k, v in observations_for_embedding.items() if k in cfg.policy.input_features
+            }
+            # TODO(jpizarrom): use original image [0,255], but it can be better to move octo normalization to processor?
+            observations_for_embedding = {
+                **{"observation.state": observations_for_embedding["observation.state"]},
+                # TODO(jpizarrom): move octo preprocessing to processor?
+                # **{
+                #     k: v
+                #     for k, v in new_transition[TransitionKey.OBSERVATION].items()
+                #     if "observation.images" in k
+                # },
+            }
+            # TODO(jpizarrom): use original images [0,255], but it can be better to move octo normalization to processor?
+            observations_for_embedding["observation.images.front"] = transform_image(
+                new_obs_original["pixels"]["front"], (256, 256), device
+            )
+            observations_for_embedding["observation.images.wrist"] = transform_image(
+                new_obs_original["pixels"]["wrist"], (128, 128), device
+            )
+            # observations_for_embedding["observation.images.front"] = new_transition[TransitionKey.OBSERVATION]["observation.images.front"]
+            # observations_for_embedding["observation.images.wrist"] = new_transition[TransitionKey.OBSERVATION]["observation.images.wrist"]
+
+            with torch.no_grad():
+                action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
+                    observations=observations_for_embedding
+                )
+
+            new_transition[TransitionKey.OBSERVATION]["action_embedding"] = action_embeddings.cpu()
+            next_observation["action_embedding"] = action_embeddings.cpu()
 
         # Teleop action is the action that was executed in the environment
         # It is either the action from the teleop device or the action from the policy
@@ -486,6 +600,46 @@ def act_with_policy(
             # Process initial observation
             transition = create_transition(observation=obs, info=info)
             transition = env_processor(transition)
+
+            observations_for_embedding = {
+                k: v
+                for k, v in transition[TransitionKey.OBSERVATION].items()
+                if k in cfg.policy.input_features and "observation.images" not in k
+            }
+            observations_for_embedding = preprocessor(
+                {
+                    **{"observation.state": observations_for_embedding["observation.state"]},
+                }
+            )
+            # The preprocessor may add extra keys, filter them out
+            observations_for_embedding = {
+                k: v for k, v in observations_for_embedding.items() if k in cfg.policy.input_features
+            }
+            # TODO(jpizarrom): use original image [0,255], but it can be better to move octo normalization to processor?
+            observations_for_embedding = {
+                **{"observation.state": observations_for_embedding["observation.state"]},
+                # TODO(jpizarrom): move octo preprocessing to processor?
+                # **{
+                #     k: v
+                #     for k, v in transition[TransitionKey.OBSERVATION].items()
+                #     if "observation.images" in k
+                # },
+            }
+            # TODO(jpizarrom): use original images [0,255], but it can be better to move octo normalization to processor?
+            observations_for_embedding["observation.images.front"] = transform_image(
+                obs["pixels"]["front"], (256, 256), device
+            )
+            observations_for_embedding["observation.images.wrist"] = transform_image(
+                obs["pixels"]["wrist"], (128, 128), device
+            )
+            # observations_for_embedding["observation.images.front"] = transition[TransitionKey.OBSERVATION]["observation.images.front"]
+            # observations_for_embedding["observation.images.wrist"] = transition[TransitionKey.OBSERVATION]["observation.images.wrist"]
+            with torch.no_grad():
+                action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
+                    observations=observations_for_embedding
+                )
+
+            transition[TransitionKey.OBSERVATION]["action_embedding"] = action_embeddings.cpu()
 
         if cfg.env.fps is not None:
             dt_time = time.perf_counter() - start_time

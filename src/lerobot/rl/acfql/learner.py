@@ -360,9 +360,12 @@ def add_actor_information_and_train(
 
     log_training_info(cfg=cfg, policy=policy)
 
-    replay_buffer = initialize_replay_buffer(cfg, device, storage_device)
     batch_size = cfg.batch_size
+    replay_buffer = None
     offline_replay_buffer = None
+
+    if online_steps > 0:
+        replay_buffer = initialize_replay_buffer(cfg, device, storage_device)
 
     if cfg.dataset is not None and offline_steps > 0:
         offline_replay_buffer = initialize_offline_replay_buffer(
@@ -498,6 +501,7 @@ def add_actor_information_and_train(
                     "reward": batch["reward"],
                     "terminal": batch.get("terminals"),
                     "mask": batch.get("masks"),
+                    "truncated": batch.get("truncateds"),
                     "valid": batch.get("valid"),
                     "next_state": next_observations,
                     "observation_feature": observation_features,
@@ -609,6 +613,7 @@ def add_actor_information_and_train(
                 "action": actions,
                 "reward": batch["reward"],
                 "terminal": batch.get("terminals"),
+                "truncated": batch.get("truncateds"),
                 "mask": batch.get("masks"),
                 "valid": batch.get("valid"),
                 "next_state": next_observations,
@@ -723,6 +728,10 @@ def add_actor_information_and_train(
                 )
 
         logging.info(f"[LEARNER] Completed offline pretraining after {offline_steps} steps")
+
+    if online_steps == 0:
+        logging.info("[LEARNER] No online steps specified, training complete.")
+        return
 
     # =============================================================================
     # PHASE 2: ONLINE FINE-TUNING
@@ -863,6 +872,7 @@ def add_actor_information_and_train(
                 "state": observations,
                 "terminal": batch["terminals"],
                 "mask": batch["masks"],
+                "truncated": batch.get("truncateds"),
                 "valid": batch["valid"],
                 "next_state": next_observations,
                 # "done": done,
@@ -968,6 +978,7 @@ def add_actor_information_and_train(
             "state": observations,
             "terminal": batch.get("terminals"),
             "mask": batch.get("masks"),
+            "truncated": batch.get("truncateds"),
             "valid": batch.get("valid"),
             "next_state": next_observations,
             # "done": done,

@@ -27,8 +27,8 @@ import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
 from lerobot.policies.acfql.configuration_acfql import ACFQLConfig, is_image_feature
-from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.octo.modeling_octo import OctoPolicy
+from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import get_device_from_parameters
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_STATE
 
@@ -86,7 +86,9 @@ class ACFQLPolicy(
         raise NotImplementedError("ACFQLPolicy does not support action chunking. It returns single actions!")
 
     @torch.no_grad()
-    def compute_flow_actions(self, observations, observations_features, noises: Tensor, action_embeddings) -> Tensor:
+    def compute_flow_actions(
+        self, observations, observations_features, noises: Tensor, action_embeddings
+    ) -> Tensor:
         actions = noises
         flow_steps = self.config.flow_steps
 
@@ -94,7 +96,9 @@ class ACFQLPolicy(
         for i in range(flow_steps):
             t_val = float(i) / flow_steps
             t = torch.full((actions.shape[0], 1), t_val, device=noises.device)
-            vels = self.actor_bc_flow(observations, observations_features, actions, t, action_embeddings=action_embeddings)
+            vels = self.actor_bc_flow(
+                observations, observations_features, actions, t, action_embeddings=action_embeddings
+            )
             actions = actions + vels / flow_steps
 
         actions = torch.clamp(actions, -1.0, 1.0)
@@ -109,13 +113,16 @@ class ACFQLPolicy(
         # querying the policy.
         if len(self._action_queue) == 0:
             observations_features = batch.get("observation_feature")
+            action_embeddings = batch.get("action_embeddings")
             batch_shape = batch["observation.state"].shape[0]
             action_dim = self.actor_onestep_flow.action_dim
             device = batch["observation.state"].device
 
             # Generate actions using distill-ddpg approach
             noises = torch.randn(batch_shape, action_dim, device=device)
-            actions = self.actor_onestep_flow(batch, observations_features, noises)
+            actions = self.actor_onestep_flow(
+                batch, observations_features, noises, action_embeddings=action_embeddings
+            )
             actions = torch.clamp(actions, -1.0, 1.0)
 
             # Reshape actions for chunking: [batch_size, chunk_size, action_dim_per_step]
@@ -171,7 +178,9 @@ class ACFQLPolicy(
 
         # Generate actions using one-step flow actor
         noises = torch.randn(batch_shape, action_dim, device=device)
-        actions, embedding = self.actor_onestep_flow(observations, observations_features, noises, return_action_embedding=True)
+        actions, embedding = self.actor_onestep_flow(
+            observations, observations_features, noises, return_action_embedding=True
+        )
         actions = torch.clamp(actions, -1.0, 1.0)
 
         # Reshape actions for chunking: [batch_size, chunk_size, action_dim_per_step]
@@ -236,6 +245,7 @@ class ACFQLPolicy(
             rewards: Tensor = batch["reward"]
             next_observations: dict[str, Tensor] = batch["next_state"]
             done: Tensor = batch["mask"]
+            truncated: Tensor = batch["truncated"]
             next_observation_features: Tensor = batch.get("next_observation_feature")
 
             loss_critic, info = self.compute_loss_critic(
@@ -244,6 +254,7 @@ class ACFQLPolicy(
                 rewards=rewards,
                 next_observations=next_observations,
                 done=done,
+                truncated=truncated,
                 valid=valid,
                 observation_features=observation_features,
                 next_observation_features=next_observation_features,
@@ -274,6 +285,7 @@ class ACFQLPolicy(
             rewards: Tensor = batch["reward"]
             next_observations: dict[str, Tensor] = batch["next_state"]
             done: Tensor = batch["mask"]
+            truncated: Tensor = batch["truncated"]
             valid: Tensor = batch["valid"]
             next_observation_features: Tensor = batch.get("next_observation_feature")
 
@@ -283,6 +295,7 @@ class ACFQLPolicy(
                 rewards=rewards,
                 next_observations=next_observations,
                 done=done,
+                truncated=truncated,
                 valid=valid,
                 observation_features=observation_features,
                 next_observation_features=next_observation_features,
@@ -312,6 +325,7 @@ class ACFQLPolicy(
         rewards,
         next_observations,
         done,
+        truncated,
         valid,
         observation_features: Tensor | None = None,
         next_observation_features: Tensor | None = None,
@@ -323,6 +337,7 @@ class ACFQLPolicy(
             rewards=rewards,
             next_observations=next_observations,
             done=done,
+            truncated=truncated,
             valid=valid,
             observation_features=observation_features,
             next_observation_features=next_observation_features,
@@ -364,6 +379,7 @@ class ACFQLPolicy(
         rewards,
         next_observations,
         done,
+        truncated,
         valid,
         observation_features: Tensor | None = None,
         next_observation_features: Tensor | None = None,
@@ -371,7 +387,9 @@ class ACFQLPolicy(
     ) -> Tensor:
         with torch.no_grad():
             # Compute next actions
-            next_actions = self._compute_next_actions(next_observations, next_observation_features, next_action_embeddings=next_action_embeddings)
+            next_actions = self._compute_next_actions(
+                next_observations, next_observation_features, next_action_embeddings=next_action_embeddings
+            )
 
             # Compute Q-values for these actions
             next_qs = self.critic_forward(
@@ -416,7 +434,19 @@ class ACFQLPolicy(
         # You compute the mean loss of the batch for each critic and then to compute the final loss you sum them up
 
         # # TD loss
-        td_loss = (((q_preds - td_target_duplicate) ** 2) * valid[:, -1]).mean(dim=1).sum()
+        # td_loss = (((q_preds - td_target_duplicate) ** 2) * valid[:, -1]).mean(dim=1).sum()
+
+        # Mask out invalid transitions
+        q_preds = q_preds[:, valid[:, -1].bool()]
+        td_target_duplicate = td_target_duplicate[:, valid[:, -1].bool()]
+        # valid_rewards = rewards[valid[:, -1].bool(), -1]
+
+        # TD loss
+        td_loss = (q_preds - td_target_duplicate) ** 2
+        td_loss = (
+            td_loss * (1 - truncated[valid[:, -1].bool(), -1])[None, :]
+        )  # Mask out truncated transitions
+        td_loss = td_loss.mean(dim=1).sum()
 
         # Total critic loss
         critics_loss = td_loss
@@ -451,7 +481,9 @@ class ACFQLPolicy(
         x_t = (1 - t) * x_0 + t * x_1
         vel = x_1 - x_0
 
-        vel_pred = self.actor_bc_flow(observations, observation_features, x_t, t, action_embeddings=action_embeddings)
+        vel_pred = self.actor_bc_flow(
+            observations, observation_features, x_t, t, action_embeddings=action_embeddings
+        )
 
         # Reshape to match action chunking structure
         vel_pred = vel_pred.reshape(batch_size, self.config.chunk_size, -1)
@@ -477,8 +509,12 @@ class ACFQLPolicy(
 
         # Distillation loss
         noises = torch.randn(batch_size, action_dim, device=observations["observation.state"].device)
-        target_flow_actions = self.compute_flow_actions(observations, observation_features, noises, action_embeddings)
-        actor_actions = self.actor_onestep_flow(observations, observation_features, noises, action_embeddings=action_embeddings)
+        target_flow_actions = self.compute_flow_actions(
+            observations, observation_features, noises, action_embeddings
+        )
+        actor_actions = self.actor_onestep_flow(
+            observations, observation_features, noises, action_embeddings=action_embeddings
+        )
         distill_loss = F.mse_loss(input=actor_actions, target=target_flow_actions)
 
         # Q loss
@@ -512,7 +548,10 @@ class ACFQLPolicy(
         return actor_loss, info
 
     def _compute_next_actions(
-        self, next_observations: dict[str, Tensor], next_observation_features: Tensor | None = None, next_action_embeddings: Tensor | None = None
+        self,
+        next_observations: dict[str, Tensor],
+        next_observation_features: Tensor | None = None,
+        next_action_embeddings: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Compute next actions for target Q-value calculation.
 
@@ -524,7 +563,9 @@ class ACFQLPolicy(
 
         all_noises = torch.randn(batch_size, action_dim, device=device)
 
-        next_actions = self.actor_onestep_flow(next_observations, next_observation_features, all_noises, action_embeddings=next_action_embeddings)
+        next_actions = self.actor_onestep_flow(
+            next_observations, next_observation_features, all_noises, action_embeddings=next_action_embeddings
+        )
         next_actions = torch.clamp(next_actions, -1.0, 1.0)
 
         return next_actions

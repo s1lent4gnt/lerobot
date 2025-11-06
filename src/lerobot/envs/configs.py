@@ -18,7 +18,6 @@ from typing import Any
 
 import draccus
 
-from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
@@ -148,6 +147,7 @@ class PushtEnv(EnvConfig):
 class ImagePreprocessingConfig:
     crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None
     resize_size: tuple[int, int] | None = None
+    resize_size_dict: dict[str, tuple[int, int]] | None = None
 
 
 @dataclass
