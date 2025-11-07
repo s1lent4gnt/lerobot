@@ -1201,6 +1201,10 @@ def add_actor_information_and_train(
                 postprocessor=postprocessor,
             )
 
+        if optimization_step >= offline_steps + online_steps:
+            logging.info(f"[LEARNER] Completed online fine-tuning after {online_steps} steps")
+            break
+
 
 def save_training_checkpoint(
     cfg: TrainRLServerPipelineConfig,
