@@ -489,6 +489,30 @@ def add_actor_information_and_train(
                     next_observations=next_observations,
                 )
 
+                if action_embeddings is None or next_action_embeddings is None:
+                    observations_for_embedding = {
+                        **{"observation.state": observations["observation.state"]},
+                        # **{k: v for k, v in observations.items() if "observation.images" not in k},
+                        **{k: v for k, v in batch["state"].items() if "observation.images" in k},
+                    }
+
+                    next_observations_for_embedding = {
+                        **{"observation.state": next_observations["observation.state"]},
+                        # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
+                        **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
+                    }
+                    check_nan_in_transition(
+                        observations=observations_for_embedding,
+                        actions=actions.reshape(actions.shape[0], -1),
+                        next_state=next_observations_for_embedding,
+                    )
+
+                    action_embeddings, next_action_embeddings = get_action_embeddings(
+                        policy=policy,
+                        observations=observations_for_embedding,
+                        next_observations=next_observations_for_embedding,
+                    )
+
                 # Use precomputed action embeddings from recorded dataset (now in state)
                 # action_embeddings = observations.get("action_embedding")
                 # next_action_embeddings = next_observations.get("action_embedding")
@@ -601,6 +625,29 @@ def add_actor_information_and_train(
                 observations=observations,
                 next_observations=next_observations,
             )
+            if action_embeddings is None or next_action_embeddings is None:
+                observations_for_embedding = {
+                    **{"observation.state": observations["observation.state"]},
+                    # **{k: v for k, v in observations.items() if "observation.images" not in k},
+                    **{k: v for k, v in batch["state"].items() if "observation.images" in k},
+                }
+
+                next_observations_for_embedding = {
+                    **{"observation.state": next_observations["observation.state"]},
+                    # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
+                    **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
+                }
+                check_nan_in_transition(
+                    observations=observations_for_embedding,
+                    actions=actions.reshape(actions.shape[0], -1),
+                    next_state=next_observations_for_embedding,
+                )
+
+                action_embeddings, next_action_embeddings = get_action_embeddings(
+                    policy=policy,
+                    observations=observations_for_embedding,
+                    next_observations=next_observations_for_embedding,
+                )
 
             # Use precomputed action embeddings from recorded dataset (now in state)
             # action_embeddings = observations.get("action_embedding")
@@ -860,6 +907,30 @@ def add_actor_information_and_train(
                 policy=policy, observations=observations, next_observations=next_observations
             )
 
+            if action_embeddings is None or next_action_embeddings is None:
+                observations_for_embedding = {
+                    **{"observation.state": observations["observation.state"]},
+                    # **{k: v for k, v in observations.items() if "observation.images" not in k},
+                    **{k: v for k, v in batch["state"].items() if "observation.images" in k},
+                }
+
+                next_observations_for_embedding = {
+                    **{"observation.state": next_observations["observation.state"]},
+                    # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
+                    **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
+                }
+                check_nan_in_transition(
+                    observations=observations_for_embedding,
+                    actions=actions.reshape(actions.shape[0], -1),
+                    next_state=next_observations_for_embedding,
+                )
+
+                action_embeddings, next_action_embeddings = get_action_embeddings(
+                    policy=policy,
+                    observations=observations_for_embedding,
+                    next_observations=next_observations_for_embedding,
+                )
+
             # Use precomputed action embeddings from recorded dataset (now in state)
             # action_embeddings = observations.get("action_embedding")
             # next_action_embeddings = next_observations.get("action_embedding")
@@ -965,6 +1036,30 @@ def add_actor_information_and_train(
         observation_features, next_observation_features = get_observation_features(
             policy=policy, observations=observations, next_observations=next_observations
         )
+
+        if action_embeddings is None or next_action_embeddings is None:
+            observations_for_embedding = {
+                **{"observation.state": observations["observation.state"]},
+                # **{k: v for k, v in observations.items() if "observation.images" not in k},
+                **{k: v for k, v in batch["state"].items() if "observation.images" in k},
+            }
+
+            next_observations_for_embedding = {
+                **{"observation.state": next_observations["observation.state"]},
+                # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
+                **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
+            }
+            check_nan_in_transition(
+                observations=observations_for_embedding,
+                actions=actions.reshape(actions.shape[0], -1),
+                next_state=next_observations_for_embedding,
+            )
+
+            action_embeddings, next_action_embeddings = get_action_embeddings(
+                policy=policy,
+                observations=observations_for_embedding,
+                next_observations=next_observations_for_embedding,
+            )
 
         # Use precomputed action embeddings from recorded dataset (now in state)
         # action_embeddings = observations.get("action_embedding")
@@ -1433,6 +1528,22 @@ def get_observation_features(
         next_observation_features = policy.encoder_critic.get_cached_image_features(next_observations)
 
     return observation_features, next_observation_features
+
+
+def get_action_embeddings(
+    policy: ACFQLPolicy, observations: torch.Tensor, next_observations: torch.Tensor
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    if not policy.config.freeze_base_vla:
+        return None, None
+
+    with torch.no_grad():
+        action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
+            observations=observations
+        )
+        next_action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
+            observations=next_observations
+        )
+    return action_embeddings, next_action_embeddings
 
 
 def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):

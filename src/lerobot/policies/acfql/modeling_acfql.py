@@ -1191,6 +1191,9 @@ class OctoEncodingWrapper(nn.Module):
     ) -> tuple[Tensor, Tensor | None]:
         """Extract action embeddings from Octo transformer and concatenate with proprioception"""
         if action_embeddings is None:
+            raise NotImplementedError(
+                "Use cached action embeddings. Computing on-the-fly is not supported as it should get [0,1] images without normalization."
+            )
             # Get batch size from observations
             batch_size = next(iter(observations.values())).shape[0]
 

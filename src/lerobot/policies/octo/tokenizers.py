@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import re
-from typing import Dict, List, Optional, Tuple
 from collections.abc import Sequence
 
 import numpy as np
@@ -33,7 +32,10 @@ def normalize_images(img, img_norm_type="default"):
     """Normalize images according to the specified normalization type."""
     if img_norm_type == "default":
         # put pixels in [-1, 1]
-        return img.float() / 127.5 - 1.0
+        # TODO (jpizarrom): allow both versions
+        # return img.float() / 127.5 - 1.0
+        # images on LeRobot datasets are usually in [0,1]
+        return img.float() * 2.0 - 1.0
     elif img_norm_type == "imagenet":
         # put pixels in [0,1]
         img = img.float() / 255.0
@@ -134,7 +136,7 @@ class SmallStem(nn.Module):
         self.conv_layers = nn.ModuleList()
         in_channels = 6  # Assuming RGB input
 
-        for n, (kernel_size, stride, out_features, conv_padding) in enumerate(
+        for _n, (kernel_size, stride, out_features, conv_padding) in enumerate(
             zip(kernel_sizes, strides, features, padding, strict=True),
         ):
             self.conv_layers.append(
@@ -167,9 +169,7 @@ class SmallStem(nn.Module):
         # FiLM conditioning layer
         self.film = FilmConditioning() if use_film else None
 
-    def forward(
-        self, observations: torch.Tensor, train: bool = True, cond_var: torch.Tensor | None = None
-    ):
+    def forward(self, observations: torch.Tensor, train: bool = True, cond_var: torch.Tensor | None = None):
         """
         Args:
             observations: Tensor of shape [batch_size, height, width, channels]
@@ -234,7 +234,7 @@ class SmallStem16(SmallStem):
 
 def regex_match(regex_keys, x):
     """Match a string against a list of regex patterns."""
-    return any([re.match(r_key, x) for r_key in regex_keys])
+    return any(re.match(r_key, x) for r_key in regex_keys)
 
 
 def regex_filter(regex_keys, xs):
@@ -252,7 +252,7 @@ def generate_proper_pad_mask(
         print("No pad_mask_dict found. Nothing will be masked.")
         return torch.ones(tokens.shape[:-1], dtype=torch.bool, device=tokens.device)
 
-    if not all([key in pad_mask_dict for key in keys]):
+    if not all(key in pad_mask_dict for key in keys):
         print(f"pad_mask_dict missing keys {set(keys) - set(pad_mask_dict.keys())}. Nothing will be masked.")
         return torch.ones(tokens.shape[:-1], dtype=torch.bool, device=tokens.device)
 
@@ -272,8 +272,8 @@ class ImageTokenizer(nn.Module):
         num_tokens: int = 8,
         conditioning_type: str = "none",
         obs_stack_keys: Sequence[str] = ("image_.*", "depth_.*"),
-        task_stack_keys: Sequence[str] = tuple(),
-        task_film_keys: Sequence[str] = tuple(),
+        task_stack_keys: Sequence[str] = (),
+        task_film_keys: Sequence[str] = (),
         proper_pad_mask: bool = True,
     ):
         super().__init__()
@@ -358,7 +358,7 @@ class ImageTokenizer(nn.Module):
         if self.proper_pad_mask:
             pad_mask = generate_proper_pad_mask(
                 image_tokens,
-                observations.get("pad_mask_dict", None),
+                observations.get("pad_mask_dict"),
                 obs_stack_keys,
             )
         else:
