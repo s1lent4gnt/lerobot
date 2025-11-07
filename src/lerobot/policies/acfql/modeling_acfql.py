@@ -439,7 +439,7 @@ class ACFQLPolicy(
         # Mask out invalid transitions
         q_preds = q_preds[:, valid[:, -1].bool()]
         td_target_duplicate = td_target_duplicate[:, valid[:, -1].bool()]
-        # valid_rewards = rewards[valid[:, -1].bool(), -1]
+        valid_rewards = rewards[valid[:, -1].bool(), -1]
 
         # TD loss
         td_loss = (q_preds - td_target_duplicate) ** 2
@@ -457,6 +457,7 @@ class ACFQLPolicy(
             "predicted_qs": torch.mean(q_preds),
             "target_qs": torch.mean(td_target_duplicate),
             "rewards": rewards.mean(),
+            "valid_rewards": valid_rewards.mean(),
         }
 
         return critics_loss, info
