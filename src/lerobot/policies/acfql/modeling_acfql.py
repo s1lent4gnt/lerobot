@@ -574,9 +574,9 @@ class ACFQLPolicy(
     def _init_octo_policy(self):
         """Initialize Octo VLA policy."""
         # ConRFT always requires an Octo model
-        self.octo_policy = OctoPolicy.from_pretrained(self.config.base_vla_model_path)
+        self.encoder_octo_policy = OctoPolicy.from_pretrained(self.config.base_vla_model_path)
         if self.config.freeze_base_vla:
-            for param in self.octo_policy.parameters():
+            for param in self.encoder_octo_policy.parameters():
                 param.requires_grad = False
 
     def _init_encoders(self):
@@ -592,14 +592,14 @@ class ACFQLPolicy(
         #     self.encoder_critic if self.shared_encoder else SACObservationEncoder(self.config)
         # )
         self.encoder_actor_bc_flow = OctoEncodingWrapper(
-            self.octo_policy,
+            self.encoder_octo_policy,
             use_proprio=self.config.use_proprio,
             state_dim=self.config.state_dim,
             proprio_latent_dim=self.config.proprio_latent_dim,
         )
 
         self.encoder_actor_onestep_flow = OctoEncodingWrapper(
-            self.octo_policy,
+            self.encoder_octo_policy,
             use_proprio=self.config.use_proprio,
             state_dim=self.config.state_dim,
             proprio_latent_dim=self.config.proprio_latent_dim,
