@@ -1240,6 +1240,9 @@ class OctoEncodingWrapper(nn.Module):
 
         encoded = action_embeddings
 
+        if stop_gradient:
+            action_embeddings = action_embeddings.detach()
+
         # Add proprioception
         if self.use_proprio and "observation.state" in observations:
             state = observations["observation.state"]
@@ -1259,10 +1262,6 @@ class OctoEncodingWrapper(nn.Module):
 
             state_encoded = self.proprio_encoder(state)
             encoded = torch.cat([encoded, state_encoded], dim=-1)
-
-        if stop_gradient:
-            action_embeddings = action_embeddings.detach()
-            state_encoded = state_encoded.detach()
 
         return encoded, action_embeddings
 
