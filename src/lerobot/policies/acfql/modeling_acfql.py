@@ -1262,7 +1262,7 @@ class OctoEncodingWrapper(nn.Module):
 
         if stop_gradient:
             action_embeddings = action_embeddings.detach()
-            encoded = encoded.detach()
+            state_encoded = state_encoded.detach()
 
         return encoded, action_embeddings
 
