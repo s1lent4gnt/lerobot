@@ -75,7 +75,6 @@ from lerobot.rl.process import ProcessSignalHandler
 from lerobot.rl.wandb_utils import WandBLogger
 from lerobot.robots import so100_follower  # noqa: F401
 from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
-from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.transport.utils import (
     bytes_to_transitions,
     state_to_bytes,
@@ -1492,10 +1491,10 @@ def process_transitions(
             # Add to offline buffer if it's an intervention
             # TODO(jpizarrom): Interventions should not be added to offline buffer when using action chunks
             # TODO(jpizarrom): Review if the enum or the str value is available in the complementary info
-            if dataset_repo_id is not None and transition.get("complementary_info", {}).get(
-                TeleopEvents.IS_INTERVENTION
-            ):
-                offline_replay_buffer.add(**transition)
+            # if dataset_repo_id is not None and transition.get("complementary_info", {}).get(
+            #     TeleopEvents.IS_INTERVENTION
+            # ):
+            #     offline_replay_buffer.add(**transition)
 
 
 if __name__ == "__main__":
