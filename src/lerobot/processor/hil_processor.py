@@ -186,7 +186,6 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
 
     crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None
     resize_size: tuple[int, int] | None = None
-    resize_size_dict: dict[str, tuple[int, int]] | None = None
 
     def observation(self, observation: dict) -> dict:
         """
@@ -198,7 +197,7 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
         Returns:
             A new observation dictionary with transformed images.
         """
-        if self.resize_size is None and not self.crop_params_dict and self.resize_size_dict is None:
+        if self.resize_size is None and not self.crop_params_dict:
             return observation
 
         new_observation = dict(observation)
@@ -217,10 +216,7 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
             if self.crop_params_dict is not None and key in self.crop_params_dict:
                 crop_params = self.crop_params_dict[key]
                 image = F.crop(image, *crop_params)
-            if self.resize_size_dict is not None and key in self.resize_size_dict:
-                image = F.resize(image, self.resize_size_dict[key])
-                image = image.clamp(0.0, 1.0)
-            elif self.resize_size is not None:
+            if self.resize_size is not None:
                 image = F.resize(image, self.resize_size)
                 image = image.clamp(0.0, 1.0)
             new_observation[key] = image.to(device)

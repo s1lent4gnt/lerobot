@@ -380,7 +380,6 @@ def make_processors(
                 ImageCropResizeProcessorStep(
                     crop_params_dict=cfg.processor.image_preprocessing.crop_params_dict,
                     resize_size=cfg.processor.image_preprocessing.resize_size,
-                    resize_size_dict=cfg.processor.image_preprocessing.resize_size_dict,
                 )
             )
         env_pipeline_steps.extend(

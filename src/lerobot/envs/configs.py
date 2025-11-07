@@ -147,7 +147,6 @@ class PushtEnv(EnvConfig):
 class ImagePreprocessingConfig:
     crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None
     resize_size: tuple[int, int] | None = None
-    resize_size_dict: dict[str, tuple[int, int]] | None = None
 
 
 @dataclass
