@@ -27,6 +27,7 @@ from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.envs.configs import HILSerlRobotEnvConfig
 from lerobot.model.kinematics import RobotKinematics
+from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     AddTeleopActionAsComplimentaryDataStep,
@@ -86,7 +87,7 @@ from lerobot.utils.utils import (
     log_say,
 )
 
-from .utils import get_frequency_stats
+from lerobot.rl.acfql.utils import get_frequency_stats
 
 logging.basicConfig(level=logging.INFO)
 
@@ -516,10 +517,11 @@ def make_processors(
 
 def control_loop(
     env: gym.Env,
+    policy: PreTrainedPolicy,
     env_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
     action_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
     teleop_device: Teleoperator,
-    cfg: GymManipulatorConfig,
+    cfg: HILSerlRobotEnvConfig,
 ) -> None:
     """Main control loop for robot environment interaction.
     if cfg.mode == "record": then a dataset will be created and recorded
@@ -584,6 +586,15 @@ def control_loop(
                     "names": ["channels", "height", "width"],
                 }
 
+        embedding_dim = 384
+        compute_embedding = True
+        if compute_embedding:
+            features["action_embedding"] = {
+                "dtype": "float32",
+                "shape": (embedding_dim,),
+                "names": None,
+            }
+
         # Create dataset
         dataset = LeRobotDataset.create(
             cfg.dataset.repo_id,
@@ -621,6 +632,13 @@ def control_loop(
             env_processor=env_processor,
             action_processor=action_processor,
         )
+
+        _, embedding_tensor = policy.select_action_with_embedding(obs)
+        current_embedding = embedding_tensor.cpu().numpy()
+        # Ensure embedding has correct shape (384,) not (1, 384)
+        if current_embedding.ndim > 1:
+            current_embedding = current_embedding.squeeze()
+
         terminated = transition.get(TransitionKey.DONE, False)
         truncated = transition.get(TransitionKey.TRUNCATED, False)
 
@@ -630,6 +648,11 @@ def control_loop(
                 for k, v in transition[TransitionKey.OBSERVATION].items()
                 if isinstance(v, torch.Tensor)
             }
+
+            # Add embeddings if computed
+            if compute_embedding:
+                observations["action_embedding"] = current_embedding
+
             # Use teleop_action if available, otherwise use the action from the transition
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
@@ -698,7 +721,7 @@ def control_loop(
 
 
 @parser.wrap()
-def main(cfg: GymManipulatorConfig) -> None:
+def main(cfg: HILSerlRobotEnvConfig) -> None:
     """Main entry point for gym manipulator script."""
     init_logging()
 
@@ -714,7 +737,15 @@ def main(cfg: GymManipulatorConfig) -> None:
         replay_trajectory(env, action_processor, cfg)
         exit()
 
-    control_loop(env, env_processor, action_processor, teleop_device, cfg)
+    policy = None
+    # Load policy using make_policy like in learner script
+    # This creates a fresh ConRFT policy with frozen Octo encoder
+    from lerobot.policies.factory import make_policy
+
+    # Create policy using make_policy exactly like in learner.py
+    policy = make_policy(cfg=cfg.policy, env_cfg=cfg)
+    policy.eval()
+    control_loop(env, policy, env_processor, action_processor, teleop_device, cfg)
 
 
 if __name__ == "__main__":
