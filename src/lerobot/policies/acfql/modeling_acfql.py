@@ -1238,10 +1238,10 @@ class OctoEncodingWrapper(nn.Module):
             # elif action_embeddings.dim() == 3:
             #     action_embeddings = action_embeddings.squeeze(1)  # Remove window dimension
 
-        encoded = action_embeddings
-
         if stop_gradient:
             action_embeddings = action_embeddings.detach()
+
+        encoded = action_embeddings
 
         # Add proprioception
         if self.use_proprio and "observation.state" in observations:
