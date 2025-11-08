@@ -642,20 +642,24 @@ def control_loop(
 
     # Determine if gripper is used
     use_gripper = cfg.env.processor.gripper.use_gripper if cfg.env.processor.gripper is not None else True
-    action_dim_without_gripper = teleop_device.action_features["shape"][0] - (1 if use_gripper else 0)
+    action_dim_without_gripper = 3
+    # if teleop_device:
+    #     action_dim_without_gripper = teleop_device.action_features["shape"][0] - (1 if use_gripper else 0)
+    # else:
+    #     action_dim_without_gripper = env.action_space.shape[0] - (1 if use_gripper else 0)
 
     dataset = None
     if cfg.mode == "record":
-        action_features = teleop_device.action_features
+        if teleop_device:
+            action_features = teleop_device.action_features
+        else:
+            action_features = {
+                "dtype": env.action_space.dtype.name,
+                "shape": env.action_space.shape,
+                "names": None,
+            }
         features = {
             ACTION: action_features,
-            REWARD: {"dtype": "float32", "shape": (1,), "names": None},
-            DONE: {"dtype": "bool", "shape": (1,), "names": None},
-        }
-        if use_gripper:
-            features["complementary_info.discrete_penalty"] = {
-                "dtype": "float32",
-                "shape": (1,),
                 "names": ["discrete_penalty"],
             }
 
@@ -720,7 +724,7 @@ def control_loop(
             action_processor=action_processor,
         )
 
-        _, embedding_tensor = policy.select_action_with_embedding(obs)
+        _, embedding_tensor = policy.select_action_with_embedding(transition[TransitionKey.OBSERVATION])
         current_embedding = embedding_tensor.cpu().numpy()
         # Ensure embedding has correct shape (384,) not (1, 384)
         if current_embedding.ndim > 1:
@@ -858,7 +862,7 @@ def main(cfg: GymManipulatorConfig) -> None:
     from lerobot.policies.factory import make_policy
 
     # Create policy using make_policy exactly like in learner.py
-    policy = make_policy(cfg=cfg.policy, env_cfg=cfg)
+    policy = make_policy(cfg=cfg.policy, env_cfg=cfg.env)
     policy.eval()
     control_loop(env, policy, env_processor, action_processor, teleop_device, cfg)
 
