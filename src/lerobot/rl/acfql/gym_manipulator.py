@@ -16,6 +16,7 @@
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import gymnasium as gym
@@ -28,6 +29,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.envs.configs import HILSerlRobotEnvConfig
 from lerobot.model.kinematics import RobotKinematics
 from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     AddTeleopActionAsComplimentaryDataStep,
@@ -52,17 +54,12 @@ from lerobot.processor import (
     create_transition,
 )
 from lerobot.processor.converters import identity_transition
-from lerobot.rl.gym_manipulator import (
-    GymManipulatorConfig,
-    replay_trajectory,
-    reset_follower_position,
-    step_env_and_process_transition,
-)
 from lerobot.robots import (  # noqa: F401
     RobotConfig,
     make_robot_from_config,
     so100_follower,
 )
+from lerobot.robots.robot import Robot
 from lerobot.robots.so100_follower.robot_kinematic_processor import (
     EEBoundsAndSafety,
     EEReferenceAndDelta,
@@ -90,6 +87,44 @@ from lerobot.utils.utils import (
 from lerobot.rl.acfql.utils import get_frequency_stats
 
 logging.basicConfig(level=logging.INFO)
+
+
+@dataclass
+class DatasetConfig:
+    """Configuration for dataset creation and management."""
+
+    repo_id: str
+    task: str
+    root: str | None = None
+    num_episodes_to_record: int = 5
+    replay_episode: int | None = None
+    push_to_hub: bool = False
+
+
+@dataclass
+class GymManipulatorConfig:
+    """Main configuration for gym manipulator environment."""
+
+    env: HILSerlRobotEnvConfig
+    policy: PreTrainedConfig
+    dataset: DatasetConfig
+    mode: str | None = None  # Either "record", "replay", None
+    device: str = "cpu"
+
+
+def reset_follower_position(robot_arm: Robot, target_position: np.ndarray) -> None:
+    """Reset robot arm to target position using smooth trajectory."""
+    current_position_dict = robot_arm.bus.sync_read("Present_Position")
+    current_position = np.array(
+        [current_position_dict[name] for name in current_position_dict], dtype=np.float32
+    )
+    trajectory = torch.from_numpy(
+        np.linspace(current_position, target_position, 50)
+    )  # NOTE: 30 is just an arbitrary number
+    for pose in trajectory:
+        action_dict = dict(zip(current_position_dict, pose, strict=False))
+        robot_arm.bus.sync_write("Goal_Position", action_dict)
+        busy_wait(0.015)
 
 
 class RobotEnv(gym.Env):
@@ -515,13 +550,65 @@ def make_processors(
     )
 
 
+def step_env_and_process_transition(
+    env: gym.Env,
+    transition: EnvTransition,
+    action: torch.Tensor,
+    env_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
+    action_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
+) -> EnvTransition:
+    """
+    Execute one step with processor pipeline.
+
+    Args:
+        env: The robot environment
+        transition: Current transition state
+        action: Action to execute
+        env_processor: Environment processor
+        action_processor: Action processor
+
+    Returns:
+        Processed transition with updated state.
+    """
+
+    # Create action transition
+    transition[TransitionKey.ACTION] = action
+    transition[TransitionKey.OBSERVATION] = (
+        env.get_raw_joint_positions() if hasattr(env, "get_raw_joint_positions") else {}
+    )
+    processed_action_transition = action_processor(transition)
+    processed_action = processed_action_transition[TransitionKey.ACTION]
+
+    obs, reward, terminated, truncated, info = env.step(processed_action)
+
+    reward = reward + processed_action_transition[TransitionKey.REWARD]
+    terminated = terminated or processed_action_transition[TransitionKey.DONE]
+    truncated = truncated or processed_action_transition[TransitionKey.TRUNCATED]
+    complementary_data = processed_action_transition[TransitionKey.COMPLEMENTARY_DATA].copy()
+    new_info = processed_action_transition[TransitionKey.INFO].copy()
+    new_info.update(info)
+
+    new_transition = create_transition(
+        observation=obs,
+        action=processed_action,
+        reward=reward,
+        done=terminated,
+        truncated=truncated,
+        info=new_info,
+        complementary_data=complementary_data,
+    )
+    new_transition = env_processor(new_transition)
+
+    return new_transition
+
+
 def control_loop(
     env: gym.Env,
     policy: PreTrainedPolicy,
     env_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
     action_processor: DataProcessorPipeline[EnvTransition, EnvTransition],
     teleop_device: Teleoperator,
-    cfg: HILSerlRobotEnvConfig,
+    cfg: GymManipulatorConfig,
 ) -> None:
     """Main control loop for robot environment interaction.
     if cfg.mode == "record": then a dataset will be created and recorded
@@ -720,8 +807,36 @@ def control_loop(
         dataset.push_to_hub()
 
 
+def replay_trajectory(
+    env: gym.Env, action_processor: DataProcessorPipeline, cfg: GymManipulatorConfig
+) -> None:
+    """Replay recorded trajectory on robot environment."""
+    assert cfg.dataset.replay_episode is not None, "Replay episode must be provided for replay"
+
+    dataset = LeRobotDataset(
+        cfg.dataset.repo_id,
+        root=cfg.dataset.root,
+        episodes=[cfg.dataset.replay_episode],
+        download_videos=False,
+    )
+    episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == cfg.dataset.replay_episode)
+    actions = episode_frames.select_columns(ACTION)
+
+    _, info = env.reset()
+
+    for action_data in actions:
+        start_time = time.perf_counter()
+        transition = create_transition(
+            observation=env.get_raw_joint_positions() if hasattr(env, "get_raw_joint_positions") else {},
+            action=action_data[ACTION],
+        )
+        transition = action_processor(transition)
+        env.step(transition[TransitionKey.ACTION])
+        busy_wait(1 / cfg.env.fps - (time.perf_counter() - start_time))
+
+
 @parser.wrap()
-def main(cfg: HILSerlRobotEnvConfig) -> None:
+def main(cfg: GymManipulatorConfig) -> None:
     """Main entry point for gym manipulator script."""
     init_logging()
 
