@@ -660,6 +660,13 @@ def control_loop(
             }
         features = {
             ACTION: action_features,
+            REWARD: {"dtype": "float32", "shape": (1,), "names": None},
+            DONE: {"dtype": "bool", "shape": (1,), "names": None},
+        }
+        if use_gripper:
+            features["complementary_info.discrete_penalty"] = {
+                "dtype": "float32",
+                "shape": (1,),
                 "names": ["discrete_penalty"],
             }
 
