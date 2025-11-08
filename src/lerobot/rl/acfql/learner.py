@@ -908,28 +908,29 @@ def add_actor_information_and_train(
             )
 
             if action_embeddings is None or next_action_embeddings is None:
-                observations_for_embedding = {
-                    **{"observation.state": observations["observation.state"]},
-                    # **{k: v for k, v in observations.items() if "observation.images" not in k},
-                    **{k: v for k, v in batch["state"].items() if "observation.images" in k},
-                }
+                raise NotImplementedError("Action embeddings must be provided in online RL setting.")
+                # observations_for_embedding = {
+                #     **{"observation.state": observations["observation.state"]},
+                #     # **{k: v for k, v in observations.items() if "observation.images" not in k},
+                #     **{k: v for k, v in batch["state"].items() if "observation.images" in k},
+                # }
 
-                next_observations_for_embedding = {
-                    **{"observation.state": next_observations["observation.state"]},
-                    # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
-                    **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
-                }
-                check_nan_in_transition(
-                    observations=observations_for_embedding,
-                    actions=actions.reshape(actions.shape[0], -1),
-                    next_state=next_observations_for_embedding,
-                )
+                # next_observations_for_embedding = {
+                #     **{"observation.state": next_observations["observation.state"]},
+                #     # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
+                #     **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
+                # }
+                # check_nan_in_transition(
+                #     observations=observations_for_embedding,
+                #     actions=actions.reshape(actions.shape[0], -1),
+                #     next_state=next_observations_for_embedding,
+                # )
 
-                action_embeddings, next_action_embeddings = get_action_embeddings(
-                    policy=policy,
-                    observations=observations_for_embedding,
-                    next_observations=next_observations_for_embedding,
-                )
+                # action_embeddings, next_action_embeddings = get_action_embeddings(
+                #     policy=policy,
+                #     observations=observations_for_embedding,
+                #     next_observations=next_observations_for_embedding,
+                # )
 
             # Use precomputed action embeddings from recorded dataset (now in state)
             # action_embeddings = observations.get("action_embedding")
@@ -1038,28 +1039,29 @@ def add_actor_information_and_train(
         )
 
         if action_embeddings is None or next_action_embeddings is None:
-            observations_for_embedding = {
-                **{"observation.state": observations["observation.state"]},
-                # **{k: v for k, v in observations.items() if "observation.images" not in k},
-                **{k: v for k, v in batch["state"].items() if "observation.images" in k},
-            }
+            raise RuntimeError("Action embeddings must be provided in online training.")
+            # observations_for_embedding = {
+            #     **{"observation.state": observations["observation.state"]},
+            #     # **{k: v for k, v in observations.items() if "observation.images" not in k},
+            #     **{k: v for k, v in batch["state"].items() if "observation.images" in k},
+            # }
 
-            next_observations_for_embedding = {
-                **{"observation.state": next_observations["observation.state"]},
-                # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
-                **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
-            }
-            check_nan_in_transition(
-                observations=observations_for_embedding,
-                actions=actions.reshape(actions.shape[0], -1),
-                next_state=next_observations_for_embedding,
-            )
+            # next_observations_for_embedding = {
+            #     **{"observation.state": next_observations["observation.state"]},
+            #     # **{k: v for k, v in next_observations.items() if "observation.images" not in k},
+            #     **{k: v for k, v in batch["next_state"].items() if "observation.images" in k},
+            # }
+            # check_nan_in_transition(
+            #     observations=observations_for_embedding,
+            #     actions=actions.reshape(actions.shape[0], -1),
+            #     next_state=next_observations_for_embedding,
+            # )
 
-            action_embeddings, next_action_embeddings = get_action_embeddings(
-                policy=policy,
-                observations=observations_for_embedding,
-                next_observations=next_observations_for_embedding,
-            )
+            # action_embeddings, next_action_embeddings = get_action_embeddings(
+            #     policy=policy,
+            #     observations=observations_for_embedding,
+            #     next_observations=next_observations_for_embedding,
+            # )
 
         # Use precomputed action embeddings from recorded dataset (now in state)
         # action_embeddings = observations.get("action_embedding")

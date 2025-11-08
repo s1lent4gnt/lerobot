@@ -354,7 +354,13 @@ def act_with_policy(
             return
 
         observation = {
-            k: v for k, v in transition[TransitionKey.OBSERVATION].items() if k in cfg.policy.input_features
+            **{
+                k: v
+                for k, v in transition[TransitionKey.OBSERVATION].items()
+                if k in cfg.policy.input_features
+            },
+            # TODO(jpizarrom): temporary fix to pass action embeddings when not in input features
+            **{k: v for k, v in transition[TransitionKey.OBSERVATION].items() if k == "action_embedding"},
         }
 
         observation_for_inference = preprocessor(
@@ -376,6 +382,12 @@ def act_with_policy(
         )
 
         action_embeddings = observation_for_inference.get("observation.action_embedding")
+        if action_embeddings is None:
+            # TODO(jpizarrom): fallback to transition embeddings if it was excluded by missing cfg.policy.input_features
+            action_embeddings = transition[TransitionKey.OBSERVATION].get("action_embedding")
+            if action_embeddings is not None:
+                action_embeddings = action_embeddings.to(device)
+
         # The preprocessor may add extra keys, filter them out
         observation_for_inference = {
             k: v for k, v in observation_for_inference.items() if k in cfg.policy.input_features
@@ -562,13 +574,13 @@ def act_with_policy(
                 "observation.images.front": transition[TransitionKey.OBSERVATION]["observation.images.front"],
                 "observation.images.wrist": transition[TransitionKey.OBSERVATION]["observation.images.wrist"],
             }
-            # TODO(jpizarrom): use original images [0,255], but it can be better to move octo normalization to processor?
-            observations_for_embedding["observation.images.front"] = transition[TransitionKey.OBSERVATION][
-                "observation.images.front"
-            ]
-            observations_for_embedding["observation.images.wrist"] = transition[TransitionKey.OBSERVATION][
-                "observation.images.wrist"
-            ]
+            # # TODO(jpizarrom): use original images [0,255], but it can be better to move octo normalization to processor?
+            # observations_for_embedding["observation.images.front"] = transition[TransitionKey.OBSERVATION][
+            #     "observation.images.front"
+            # ]
+            # observations_for_embedding["observation.images.wrist"] = transition[TransitionKey.OBSERVATION][
+            #     "observation.images.wrist"
+            # ]
             with torch.no_grad():
                 action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
                     observations=observations_for_embedding
