@@ -731,11 +731,28 @@ def control_loop(
             action_processor=action_processor,
         )
 
-        _, embedding_tensor = policy.select_action_with_embedding(transition[TransitionKey.OBSERVATION])
-        current_embedding = embedding_tensor.cpu().numpy()
-        # Ensure embedding has correct shape (384,) not (1, 384)
-        if current_embedding.ndim > 1:
-            current_embedding = current_embedding.squeeze()
+        # _, embedding_tensor = policy.select_action_with_embedding(transition[TransitionKey.OBSERVATION])
+        # current_embedding = embedding_tensor.cpu().numpy()
+        # # Ensure embedding has correct shape (384,) not (1, 384)
+        # if current_embedding.ndim > 1:
+        #     current_embedding = current_embedding.squeeze()
+
+        observations_for_embedding = {
+            "observation.state": transition[TransitionKey.OBSERVATION]["observation.state"],
+            "observation.images.front": transition[TransitionKey.OBSERVATION][
+                "observation.images.front"
+            ],
+            "observation.images.wrist": transition[TransitionKey.OBSERVATION][
+                "observation.images.wrist"
+            ],
+        }
+
+        with torch.no_grad():
+            action_embeddings = policy.encoder_actor_onestep_flow.get_cached_action_embeddings(
+                observations=observations_for_embedding
+            )
+
+        current_embedding = action_embeddings.cpu().squeeze(0)
 
         terminated = transition.get(TransitionKey.DONE, False)
         truncated = transition.get(TransitionKey.TRUNCATED, False)
