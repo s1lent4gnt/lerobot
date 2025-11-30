@@ -54,10 +54,10 @@ class EarthRoverMiniPlusConfig(RobotConfig):
     Configuration for EarthRover Mini Plus mobile robot.
 
     This robot uses TCP communication for control and RTSP for camera streams.
-    The default configuration connects to the robot at 192.168.11.1:8888.
+    The default configuration connects to the robot at 1192.168.1.84:8888.
 
     Attributes:
-        robot_ip: IP address of the robot (default: "192.168.11.1")
+        robot_ip: IP address of the robot (default: "1192.168.1.84")
         robot_port: TCP port for robot communication (default: 8888)
         cameras: Dictionary of camera configurations
 
@@ -70,12 +70,12 @@ class EarthRoverMiniPlusConfig(RobotConfig):
 
         # Or customize
         config = EarthRoverMiniPlusConfig(
-            robot_ip="192.168.11.1",
+            robot_ip="192.168.1.84",
             robot_port=8888
         )
         ```
     """
 
-    robot_ip: str = "192.168.11.1"
+    robot_ip: str = "192.168.1.84"
     robot_port: int = 8888
     cameras: dict[str, CameraConfig] = field(default_factory=earthrover_mini_plus_cameras)

@@ -44,7 +44,7 @@ FPS = 10  # Lower FPS for cloud-based robot
 EPISODE_TIME_SEC = 30
 RESET_TIME_SEC = 5
 TASK_DESCRIPTION = "Navigate around obstacles"
-HF_REPO_ID = "lilkm/earthrover-navigation"  # Update with your username
+HF_REPO_ID = "lilkm/earthrover-navigation-low-level-sdk"  # Update with your username
 
 
 def main():

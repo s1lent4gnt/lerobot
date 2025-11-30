@@ -49,10 +49,10 @@ class EarthRoverMiniCameraConfig(CameraConfig):
         - Only 3-channel color output (RGB/BGR) is currently supported.
     """
 
-    FRONT_CAM_MAIN: str = "rtsp://192.168.11.1/live/0"
-    FRONT_CAM_SUB: str = "rtsp://192.168.11.1/live/1"
-    REAR_CAM_MAIN: str = "rtsp://192.168.11.1/live/2"
-    REAR_CAM_SUB: str = "rtsp://192.168.11.1/live/3"
+    FRONT_CAM_MAIN: str = "rtsp://192.168.1.84/live/0"
+    FRONT_CAM_SUB: str = "rtsp://192.168.1.84/live/1"
+    REAR_CAM_MAIN: str = "rtsp://192.168.1.84/live/2"
+    REAR_CAM_SUB: str = "rtsp://192.168.1.84/live/3"
 
     # Does not change actual fps, width, and height, just for camera info/logging purposes
     DEFAULT_FPS: float = 30.0 
