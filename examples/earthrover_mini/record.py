@@ -40,7 +40,7 @@ from lerobot.utils.utils import log_say
 
 # Configuration
 NUM_EPISODES = 2
-FPS = 10  # Lower FPS for cloud-based robot
+FPS = 30  # Lower FPS for cloud-based robot
 EPISODE_TIME_SEC = 30
 RESET_TIME_SEC = 5
 TASK_DESCRIPTION = "Navigate around obstacles"
