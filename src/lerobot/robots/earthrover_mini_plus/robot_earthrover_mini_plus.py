@@ -1,234 +1,304 @@
-import logging
-from socket import socket
-from typing import Any
-import cv2
-import threading
+#!/usr/bin/env python
 
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""EarthRover Mini Plus robot implementation using low-level TCP SDK."""
+
+import logging
+from functools import cached_property
+from typing import Any
+
+from earth_rover_mini_sdk import EarthRoverMini_API
 from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
-from .config_earthrover_mini_plus import EarthRoverMiniPlusConfig, EarthRoverMiniCamera
+from .config_earthrover_mini_plus import EarthRoverMiniPlusConfig
 
-# The import from our low-level API, so we can call actual functions on the robot
-from earth_rover_mini_sdk import EarthRoverMini_API
-
+logger = logging.getLogger(__name__)
 
 
-#logger = logging.get_logger(__name__)
+class EarthRoverMiniPlus(Robot):
+    """
+    EarthRover Mini Plus mobile robot with low-level TCP SDK control.
 
+    This robot uses the earth_rover_mini_sdk package for direct TCP communication
+    with the robot (192.168.11.1:8888) and RTSP camera streams for vision.
 
-class EarthRover_Mini(Robot):
+    The robot provides:
+    - Differential drive control (linear and angular velocity)
+    - RTSP camera feeds (front and rear)
+    - Telemetry data (motor RPMs, IMU, battery, etc.)
+
+    Example:
+        ```python
+        from lerobot.robots.earthrover_mini_plus import EarthRoverMiniPlus, EarthRoverMiniPlusConfig
+
+        # Create robot with default config
+        robot = EarthRoverMiniPlus(EarthRoverMiniPlusConfig())
+
+        # Connect to robot and cameras
+        robot.connect()
+
+        # Send movement command
+        action = {"speed": 50, "heading": 0}
+        robot.send_action(action)
+
+        # Get observation
+        obs = robot.get_observation()
+        print(f"Front camera shape: {obs['front'].shape}")
+        print(f"Motor RPMs: {obs['motor_Fl']}")
+
+        # Disconnect
+        robot.disconnect()
+        ```
+
+    Note:
+        Requires earth_rover_mini_sdk: pip install earth-rover-mini-sdk
+    """
 
     config_class = EarthRoverMiniPlusConfig
     name = "earthrover_mini_plus"
 
     def __init__(self, config: EarthRoverMiniPlusConfig):
+        """
+        Initialize EarthRover Mini Plus robot.
 
+        Args:
+            config: Robot configuration including camera settings
+        """
         super().__init__(config)
         self.config = config
-        self.earth_rover: None
 
-        #No motors
-        #self.base_motors = [] # todo
-        self.is_connected = False
+        # TCP SDK connection (will be initialized in connect())
+        self.earth_rover: EarthRoverMini_API | None = None
 
+        # RTSP cameras from configuration
         self.cameras = make_cameras_from_configs(config.cameras)
-        self.thread_stop_event = None
-        self.camera_thread = None
 
-        print("Cameras made from config:" + str(self.cameras))
-   
-    def is_connected(self) -> bool:
-        # Connected iff all the cameras are connected
-        return self.is_connected
-    
-    # Connects to all robot devices, currently just the cameras
-    def connect(self, calibrate: bool = True) -> None:
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-        
-        self.earth_rover = EarthRoverMini_API(ip="192.168.11.1", port=8888)
-        #EarthRoverMiniPlus(self.config)
-        self.earth_rover.connect()
-        #asyncio.run(self.earth_rover.connect())
-        for cam in self.cameras.values():
-            print(f"Connecting to camera {cam.config.index_or_path}...")
-            cam.connect()
-            if cam.is_connected:
-                print(f"{cam.config.index_or_path} connected successfully!")
-            else:
-                print(f"Failed to connect to {cam.config.index_or_path}. Exiting...")
-                raise DeviceNotConnectedError
-        
-        # Currently doesn't do anything, no configuration needed? Only need to connect.
-        self.configure()
+        # Connection state
+        self._is_connected = False
 
-        # Change the is_connected class value
-        self.is_connected = True
-
-    def start_camera_stream(self):
-        if self.camera_thread and self.camera_thread.is_alive():
-            print("Camera stream already running.")
-            return
-        self.thread_stop_event = threading.Event()
-        self.camera_thread = threading.Thread(target=self.update_stream, args=(self.thread_stop_event,), daemon=True)
-        self.camera_thread.start()
-        
-    
-    def update_stream(self, stop_event):
-        while not stop_event.is_set():
-            for idx, cam in enumerate(self.cameras.values()):
-                frame = cam.read()
-                if frame is None:
-                    continue
-                
-                cv2.imshow(f"RTSP Stream {idx}", frame)
-
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    stop_event.set()
-                    break
-
-        print("Stopping camera stream thread...")
-
-        # for cam in self.cameras.keys():
-        #         print(str(cam))
-        #         print((str(self.cameras[cam])))
-        #         frame = self.cameras[cam].read()
-        #         cv2.imshow(f"RTSP Stream {idx}", frame)
-        #         if cv2.waitKey(1) & 0xFF == ord("q"):
-        #             break
-
-    def close_camera_stream(self):
-        if self.thread_stop_event:
-            self.thread_stop_event.set()
-        
-        if self.camera_thread:
-            self.camera_thread.join(timeout=1.0)
-
-        for cam in self.cameras.values():
-            cam.disconnect()
-
-        cv2.destroyAllWindows()
-
-    def is_calibrated(self) -> bool:
-        return self.is_calibrated
-    
-    def calibrate(self) -> None:
-        """
-        Make this a calibration state machine for imu, mag, accelerometer data
-        """
-        # Calibrate the IMU, motors, etc?
-        if self.calibration:
-            pass
-            #logger.info(f"\nRunning calibration of {self}")
-
-        # todo
-    
-    # Not necessary for right now, no configuration needed for the EarthRover
-    # Just need to connect using the socket in connect, so possibly configure is unnecessary
-    def configure(self):
-        # todo
-        pass
+        logger.info(f"Initialized {self.name} with {len(self.cameras)} cameras")
 
     @property
-    def _motor_rpms_ft(self) -> dict[str, type]:
-        return {
+    def is_connected(self) -> bool:
+        """Check if robot is connected."""
+        return self._is_connected
+
+    def connect(self, calibrate: bool = True) -> None:
+        """
+        Connect to robot via TCP SDK and initialize cameras.
+
+        Args:
+            calibrate: Whether to run calibration (not required for this robot)
+
+        Raises:
+            DeviceAlreadyConnectedError: If robot is already connected
+            DeviceNotConnectedError: If connection to robot or cameras fails
+        """
+        if self._is_connected:
+            raise DeviceAlreadyConnectedError(f"{self.name} is already connected")
+
+        # Connect to robot via TCP SDK
+        logger.info(f"Connecting to {self.name} at {self.config.robot_ip}:{self.config.robot_port}")
+        self.earth_rover = EarthRoverMini_API(
+            ip=self.config.robot_ip,
+            port=self.config.robot_port
+        )
+        self.earth_rover.connect()
+
+        # Connect to RTSP cameras
+        for cam_name, cam in self.cameras.items():
+            logger.info(f"Connecting to camera '{cam_name}' at {cam.config.index_or_path}")
+            cam.connect()
+            if not cam.is_connected:
+                raise DeviceNotConnectedError(
+                    f"Failed to connect to camera '{cam_name}' at {cam.config.index_or_path}"
+                )
+            logger.info(f"✓ Camera '{cam_name}' connected")
+
+        # Run configuration
+        self.configure()
+
+        # Update connection state
+        self._is_connected = True
+        logger.info(f"✓ {self.name} connected successfully")
+
+        if calibrate:
+            self.calibrate()
+
+    def calibrate(self) -> None:
+        """Calibration not required for EarthRover Mini Plus."""
+        logger.info("Calibration not required for this robot")
+
+    @property
+    def is_calibrated(self) -> bool:
+        """Robot doesn't require calibration."""
+        return True
+
+    def configure(self) -> None:
+        """Configure robot settings (currently no configuration needed)."""
+        pass
+
+    @cached_property
+    def observation_features(self) -> dict:
+        """
+        Define observation space for the robot.
+
+        Returns:
+            Dictionary mapping feature names to their types/shapes:
+            - Cameras: (height, width, 3) tuples
+            - Motor RPMs: float values
+            - IMU data: float values (accelerometer, gyro, magnetometer)
+            - Speed and heading: float values
+        """
+        features = {}
+
+        # Camera features
+        for cam_name, cam in self.cameras.items():
+            features[cam_name] = (cam.height, cam.width, 3)
+
+        # Motor RPM features
+        features.update({
             "motor_Fl": float,
             "motor_Fr": float,
             "motor_Br": float,
             "motor_Bl": float,
-        }
-    
-    @property
-    def _speed_and_heading_ft(self) -> dict[str, type]:
-        return {
-                "speed": float,
-                "heading": float,
-            }
-    
+        })
 
-    @property
-    def _imu_ft(self) -> dict[str, type]:
-        return {
-            "accel_x": float, "accel_y": float, "accel_z": float,
-            "gyro_x": float, "gyro_y": float, "gyro_z": float,
-            "mag_x": float, "mag_y": float, "mag_z": float
-        }
+        # IMU features
+        features.update({
+            "accel_x": float,
+            "accel_y": float,
+            "accel_z": float,
+            "gyro_x": float,
+            "gyro_y": float,
+            "gyro_z": float,
+            "mag_x": float,
+            "mag_y": float,
+            "mag_z": float,
+        })
 
-    @property
-    def _cameras_ft(self) -> dict[str, tuple]:
-        return {
-            cam: (self.cameras[cam].height, self.cameras[cam].width, 3) for cam in self.cameras
-        }
+        # Speed and heading features
+        features.update({
+            "speed": float,
+            "heading": float,
+        })
 
-    @property
-    def observation_features(self) -> dict:
-        return {**self._motor_rpms_ft, **self._imu_ft, **self._speed_and_heading_ft, **self._cameras_ft}
-    
+        return features
 
-    @property
+    @cached_property
     def action_features(self) -> dict:
-        return self._speed_and_heading_ft
+        """
+        Define action space for the robot.
 
-    
+        Returns:
+            Dictionary with speed and heading control:
+            - speed: Linear velocity (float)
+            - heading: Angular velocity (float)
+        """
+        return {
+            "speed": float,
+            "heading": float,
+        }
 
-
-    
     def get_observation(self) -> dict[str, Any]:
-        #calls function in earthrover object to get observation data:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+        """
+        Get current robot observation including cameras and telemetry.
 
-        obs_dct: dict[str: Any]={}
-        obs_dct.update(self.earth_rover.get_telemetry())
-        for cam_key, cam in self.cameras.items():
-            obs_dct[cam_key] = cam.async_read()
+        Returns:
+            Dictionary containing:
+            - Camera frames (numpy arrays)
+            - Motor RPMs
+            - IMU data (accelerometer, gyro, magnetometer)
+            - Speed and heading
 
-        return obs_dct
+        Raises:
+            DeviceNotConnectedError: If robot is not connected
+        """
+        if not self._is_connected:
+            raise DeviceNotConnectedError(f"{self.name} is not connected")
 
+        observation = {}
 
-        
+        # Get telemetry from SDK (RPMs, IMU, etc.)
+        telemetry = self.earth_rover.get_telemetry()
+        observation.update(telemetry)
+
+        # Get camera frames
+        for cam_name, cam in self.cameras.items():
+            observation[cam_name] = cam.async_read()
+
+        return observation
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Send control commands to Earthrover Mini Plus"""
-       
-        # send_ctl_cmd(self.socket, self.speed, self.angular)
-
         """
-        Example of possible action dictionary:
+        Send control command to robot.
 
-        action = {
-            "linear_velocity": 0.2,
-            "angular_velocity": 5
+        Args:
+            action: Dictionary with movement commands:
+                - speed: Linear velocity (int, typically 0-100)
+                - heading: Angular velocity (int, typically -100 to 100)
+                Alternative keys also supported:
+                - linear_velocity: Alias for speed
+                - angular_velocity: Alias for heading
+
+        Returns:
+            The action that was sent (in standard format)
+
+        Raises:
+            DeviceNotConnectedError: If robot is not connected
+        """
+        if not self._is_connected:
+            raise DeviceNotConnectedError(f"{self.name} is not connected")
+
+        # Extract action values (support both key formats)
+        speed = action.get("speed", action.get("linear_velocity", 0))
+        heading = action.get("heading", action.get("angular_velocity", 0))
+
+        # Send command to robot via SDK
+        self.earth_rover.move_continuous_loop(speed=int(speed), angular=int(heading))
+
+        logger.debug(f"Sent action: speed={speed}, heading={heading}")
+
+        # Return in standard format
+        return {
+            "speed": speed,
+            "heading": heading,
         }
+
+    def disconnect(self) -> None:
         """
-        
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-        
-        # The action is the movement command, with a linear velocity and angular velocity
-        if "linear_velocity" in action or "angular_velocity" in action:
-            print("ennterrrrrrrrrrrrrrrrrrrrrrr")
-            v = action["linear_velocity"]
-            w = action["angular_velocity"]
-            # Call the api call for move, should be higher level not send_ctl_cmd
-        else:
-            return None
-        self.earth_rover.move_continuous_loop( speed=int(v),angular= int(w))
-        return
-        # return await self.earth_rover.move( speed=int(v),angular= int(w),duration=int(10))
-            
+        Disconnect from robot and cameras.
 
+        Raises:
+            DeviceNotConnectedError: If robot is not connected
+        """
+        if not self._is_connected:
+            raise DeviceNotConnectedError(f"{self.name} is not connected")
 
-
-
-    def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        for cam in self.cameras.values():
+        # Disconnect cameras
+        for cam_name, cam in self.cameras.items():
+            logger.info(f"Disconnecting camera '{cam_name}'")
             cam.disconnect()
-        self.earth_rover.disconnect()
-        #logger.info(f"{self} disconnected.")
 
+        # Disconnect robot
+        if self.earth_rover is not None:
+            logger.info(f"Disconnecting from {self.name}")
+            self.earth_rover.disconnect()
+            self.earth_rover = None
+
+        self._is_connected = False
+        logger.info(f"✓ {self.name} disconnected")
