@@ -205,13 +205,13 @@ class EarthRoverMiniPlus(Robot):
         Define action space for the robot.
 
         Returns:
-            Dictionary with speed and heading control:
-            - speed: Linear velocity (float)
-            - heading: Angular velocity (float)
+            Dictionary with linear and angular velocity control:
+            - linear.vel: Linear velocity (float)
+            - angular.vel: Angular velocity (float)
         """
         return {
-            "speed": float,
-            "heading": float,
+            "linear.vel": float,
+            "angular.vel": float,
         }
 
     def get_observation(self) -> dict[str, Any]:
@@ -303,12 +303,12 @@ class EarthRoverMiniPlus(Robot):
         # Send command to robot via SDK
         self.earth_rover.move_continuous_loop(speed=int(speed), angular=int(heading))
 
-        logger.debug(f"Sent action: speed={speed}, heading={heading}")
+        logger.debug(f"Sent action: linear={speed}, angular={heading}")
 
-        # Return in standard format (must match action_features)
+        # Return in standard format (must match action_features: linear.vel, angular.vel)
         return {
-            "speed": float(speed),
-            "heading": float(heading),
+            "linear.vel": float(speed),
+            "angular.vel": float(heading),
         }
 
     def disconnect(self) -> None:
