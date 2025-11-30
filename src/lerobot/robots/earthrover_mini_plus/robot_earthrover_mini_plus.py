@@ -269,9 +269,9 @@ class EarthRoverMiniPlus(Robot):
         observation['speed'] = float(telemetry.get('speed', 0.0))
         observation['heading'] = float(telemetry.get('heading_deg', 0.0))
 
-        # Get camera frames
+        # Get camera frames (use blocking read for reliable RTSP over WiFi)
         for cam_name, cam in self.cameras.items():
-            observation[cam_name] = cam.async_read()
+            observation[cam_name] = cam.read()
 
         return observation
 
