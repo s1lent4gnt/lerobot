@@ -1,307 +1,234 @@
-#!/usr/bin/env python
-
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-import base64
 import logging
-from functools import cached_property
+from socket import socket
 from typing import Any
-
 import cv2
-import numpy as np
-import requests
+import threading
 
-from lerobot.cameras.earthrover_mini_camera import VirtualCamera
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.cameras.utils import make_cameras_from_configs
 
 from ..robot import Robot
-from .config_earthrover_mini_plus import EarthRoverMiniPlusConfig
+from .config_earthrover_mini_plus import EarthRoverMiniPlusConfig, EarthRoverMiniCamera
 
-logger = logging.getLogger(__name__)
+# The import from our low-level API, so we can call actual functions on the robot
+from earth_rover_mini_sdk import EarthRoverMini_API
 
 
-class EarthRoverMiniPlus(Robot):
-    """
-    EarthRover Mini robot using Frodobots SDK HTTP API.
-    
-    This implementation uses the cloud-based Frodobots SDK instead of direct TCP connection.
-    Perfect for dataset recording and teleoperation through LeRobot.
-    """
+
+#logger = logging.get_logger(__name__)
+
+
+class EarthRover_Mini(Robot):
 
     config_class = EarthRoverMiniPlusConfig
     name = "earthrover_mini_plus"
 
     def __init__(self, config: EarthRoverMiniPlusConfig):
+
         super().__init__(config)
         self.config = config
-        self.sdk_base_url = "http://localhost:8000"
-        
-        # SDK cameras (base64 from HTTP API)
-        self.cameras = {}
-        self._is_connected = False
-        self._last_observation = {}
-        
-        logger.info(f"Initialized {self.name} with SDK at {self.sdk_base_url}")
+        self.earth_rover: None
 
-    @property
+        #No motors
+        #self.base_motors = [] # todo
+        self.is_connected = False
+
+        self.cameras = make_cameras_from_configs(config.cameras)
+        self.thread_stop_event = None
+        self.camera_thread = None
+
+        print("Cameras made from config:" + str(self.cameras))
+   
     def is_connected(self) -> bool:
-        return self._is_connected
-
+        # Connected iff all the cameras are connected
+        return self.is_connected
+    
+    # Connects to all robot devices, currently just the cameras
     def connect(self, calibrate: bool = True) -> None:
-        """Connect to robot via Frodobots SDK."""
-        if self._is_connected:
-            raise DeviceAlreadyConnectedError(f"{self.name} is already connected")
+        if self.is_connected:
+            raise DeviceAlreadyConnectedError(f"{self} already connected")
         
-        # Check SDK connection
-        try:
-            response = requests.get(f"{self.sdk_base_url}/data", timeout=10.0)
-            if response.status_code != 200:
-                raise DeviceNotConnectedError(
-                    f"Cannot connect to SDK at {self.sdk_base_url}. "
-                    "Make sure it's running: hypercorn main:app --reload"
-                )
-        except requests.RequestException as e:
-            raise DeviceNotConnectedError(
-                f"Cannot connect to SDK at {self.sdk_base_url}: {e}"
-            ) from e
+        self.earth_rover = EarthRoverMini_API(ip="192.168.11.1", port=8888)
+        #EarthRoverMiniPlus(self.config)
+        self.earth_rover.connect()
+        #asyncio.run(self.earth_rover.connect())
+        for cam in self.cameras.values():
+            print(f"Connecting to camera {cam.config.index_or_path}...")
+            cam.connect()
+            if cam.is_connected:
+                print(f"{cam.config.index_or_path} connected successfully!")
+            else:
+                print(f"Failed to connect to {cam.config.index_or_path}. Exiting...")
+                raise DeviceNotConnectedError
         
-        # Initialize virtual cameras for dataset recording
-        # We'll populate them with frames from SDK
-        self.cameras = {
-            "front": VirtualCamera("front", self, fps=30, width=640, height=480),
-            "rear": VirtualCamera("rear", self, fps=30, width=640, height=480),
-        }
-        
-        self._is_connected = True
-        logger.info(f"✓ {self.name} connected to SDK")
-        
-        if calibrate:
-            self.calibrate()
+        # Currently doesn't do anything, no configuration needed? Only need to connect.
+        self.configure()
 
-    def calibrate(self) -> None:
-        """Calibration not needed for SDK-based robot."""
-        logger.info("Calibration not required for SDK-based robot")
+        # Change the is_connected class value
+        self.is_connected = True
 
-    @property
+    def start_camera_stream(self):
+        if self.camera_thread and self.camera_thread.is_alive():
+            print("Camera stream already running.")
+            return
+        self.thread_stop_event = threading.Event()
+        self.camera_thread = threading.Thread(target=self.update_stream, args=(self.thread_stop_event,), daemon=True)
+        self.camera_thread.start()
+        
+    
+    def update_stream(self, stop_event):
+        while not stop_event.is_set():
+            for idx, cam in enumerate(self.cameras.values()):
+                frame = cam.read()
+                if frame is None:
+                    continue
+                
+                cv2.imshow(f"RTSP Stream {idx}", frame)
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    stop_event.set()
+                    break
+
+        print("Stopping camera stream thread...")
+
+        # for cam in self.cameras.keys():
+        #         print(str(cam))
+        #         print((str(self.cameras[cam])))
+        #         frame = self.cameras[cam].read()
+        #         cv2.imshow(f"RTSP Stream {idx}", frame)
+        #         if cv2.waitKey(1) & 0xFF == ord("q"):
+        #             break
+
+    def close_camera_stream(self):
+        if self.thread_stop_event:
+            self.thread_stop_event.set()
+        
+        if self.camera_thread:
+            self.camera_thread.join(timeout=1.0)
+
+        for cam in self.cameras.values():
+            cam.disconnect()
+
+        cv2.destroyAllWindows()
+
     def is_calibrated(self) -> bool:
-        """SDK robot doesn't require calibration."""
-        return True
+        return self.is_calibrated
+    
+    def calibrate(self) -> None:
+        """
+        Make this a calibration state machine for imu, mag, accelerometer data
+        """
+        # Calibrate the IMU, motors, etc?
+        if self.calibration:
+            pass
+            #logger.info(f"\nRunning calibration of {self}")
 
-    def configure(self) -> None:
-        """No configuration needed."""
+        # todo
+    
+    # Not necessary for right now, no configuration needed for the EarthRover
+    # Just need to connect using the socket in connect, so possibly configure is unnecessary
+    def configure(self):
+        # todo
         pass
 
-    @cached_property
+    @property
+    def _motor_rpms_ft(self) -> dict[str, type]:
+        return {
+            "motor_Fl": float,
+            "motor_Fr": float,
+            "motor_Br": float,
+            "motor_Bl": float,
+        }
+    
+    @property
+    def _speed_and_heading_ft(self) -> dict[str, type]:
+        return {
+                "speed": float,
+                "heading": float,
+            }
+    
+
+    @property
+    def _imu_ft(self) -> dict[str, type]:
+        return {
+            "accel_x": float, "accel_y": float, "accel_z": float,
+            "gyro_x": float, "gyro_y": float, "gyro_z": float,
+            "mag_x": float, "mag_y": float, "mag_z": float
+        }
+
+    @property
+    def _cameras_ft(self) -> dict[str, tuple]:
+        return {
+            cam: (self.cameras[cam].height, self.cameras[cam].width, 3) for cam in self.cameras
+        }
+
+    @property
     def observation_features(self) -> dict:
-        """Define the observation space for dataset recording."""
-        return {
-            # Cameras (height, width, channels)
-            "front": (480, 640, 3),
-            "rear": (480, 640, 3),
-            # Robot state (individual features) - using .vel suffix like LeKiwi
-            "linear.vel": float,
-            "angular.vel": float,
-            "battery.level": float,
-            "orientation.deg": float,
-        }
+        return {**self._motor_rpms_ft, **self._imu_ft, **self._speed_and_heading_ft, **self._cameras_ft}
+    
 
-    @cached_property
+    @property
     def action_features(self) -> dict:
-        """Define the action space - matches observation keys for velocities."""
-        return {
-            "linear.vel": float,
-            "angular.vel": float,
-        }
+        return self._speed_and_heading_ft
 
+    
+
+
+    
     def get_observation(self) -> dict[str, Any]:
-        """
-        Get current robot observation from SDK.
+        #calls function in earthrover object to get observation data:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        obs_dct: dict[str: Any]={}
+        obs_dct.update(self.earth_rover.get_telemetry())
+        for cam_key, cam in self.cameras.items():
+            obs_dct[cam_key] = cam.async_read()
+
+        return obs_dct
+
+
         
-        Returns observation dict with:
-        - front: front camera image
-        - rear: rear camera image  
-        - linear.vel, angular.vel: current velocities
-        - battery.level, orientation.deg: robot state
-        """
-        if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self.name} is not connected")
-        
-        observation = {}
-        
-        # Get camera images
-        try:
-            frames = self._get_camera_frames()
-            
-            # Front camera
-            if "front" in frames:
-                observation["front"] = frames["front"]
-            else:
-                observation["front"] = np.zeros((480, 640, 3), dtype=np.uint8)
-            
-            # Rear camera
-            if "rear" in frames:
-                observation["rear"] = frames["rear"]
-            else:
-                observation["rear"] = np.zeros((480, 640, 3), dtype=np.uint8)
-                
-        except Exception as e:
-            logger.warning(f"Error getting camera frames: {e}")
-            observation["front"] = np.zeros((480, 640, 3), dtype=np.uint8)
-            observation["rear"] = np.zeros((480, 640, 3), dtype=np.uint8)
-        
-        # Get robot state
-        try:
-            robot_data = self._get_robot_data()
-            
-            # Current velocities (normalized from SDK speed value)
-            # SDK gives speed 0-100, we normalize to match our action space
-            observation["linear.vel"] = robot_data.get("speed", 0) / 100.0 * 50.0  # Assume max 50 units
-            observation["angular.vel"] = 0.0  # SDK doesn't report angular velocity separately
-            
-            # Robot state
-            observation["battery.level"] = robot_data.get("battery", 0) / 100.0  # Normalize to 0-1
-            observation["orientation.deg"] = robot_data.get("orientation", 0) / 360.0  # Normalize to 0-1
-            
-        except Exception as e:
-            logger.warning(f"Error getting robot state: {e}")
-            observation["linear.vel"] = 0.0
-            observation["angular.vel"] = 0.0
-            observation["battery.level"] = 0.0
-            observation["orientation.deg"] = 0.0
-        
-        self._last_observation = observation
-        return observation
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Send control commands to Earthrover Mini Plus"""
+       
+        # send_ctl_cmd(self.socket, self.speed, self.angular)
+
         """
-        Send action to robot via SDK.
-        
-        Args:
-            action: Dict with 'linear.vel' and 'angular.vel' keys (from teleop)
-            
-        Returns:
-            The action that was sent (matches action_features keys)
-        """
-        if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self.name} is not connected")
-        
-        # Extract action values - handle both old and new key formats
-        linear = action.get("linear.vel", action.get("linear_velocity", 0.0))
-        angular = action.get("angular.vel", action.get("angular_velocity", 0.0))
-        
-        # Send to SDK
-        try:
-            self._send_command_to_sdk(linear, angular)
-        except Exception as e:
-            logger.error(f"Error sending action: {e}")
-        
-        # Return in the format that matches action_features
-        return {
-            "linear.vel": linear,
-            "angular.vel": angular,
+        Example of possible action dictionary:
+
+        action = {
+            "linear_velocity": 0.2,
+            "angular_velocity": 5
         }
-
-    def disconnect(self) -> None:
-        """Disconnect from robot."""
-        if not self._is_connected:
-            raise DeviceNotConnectedError(f"{self.name} is not connected")
+        """
         
-        # Stop the robot
-        try:
-            self._send_command_to_sdk(0.0, 0.0)
-        except:
-            pass
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
         
-        self._is_connected = False
-        logger.info(f"{self.name} disconnected")
-
-    # Helper methods for SDK communication
-    
-    def _get_camera_frames(self) -> dict[str, np.ndarray]:
-        """Get camera frames from SDK using separate endpoints."""
-        frames = {}
-        
-        # Get front camera
-        try:
-            response = requests.get(f"{self.sdk_base_url}/v2/front", timeout=10.0)
-            if response.status_code == 200:
-                data = response.json()
-                if "front_frame" in data and data["front_frame"]:
-                    front_img = self._decode_base64_image(data["front_frame"])
-                    if front_img is not None:
-                        frames["front"] = cv2.resize(front_img, (640, 480))
-        except Exception as e:
-            logger.warning(f"Error fetching front camera: {e}")
-        
-        # Get rear camera
-        try:
-            response = requests.get(f"{self.sdk_base_url}/v2/rear", timeout=10.0)
-            if response.status_code == 200:
-                data = response.json()
-                if "rear_frame" in data and data["rear_frame"]:
-                    rear_img = self._decode_base64_image(data["rear_frame"])
-                    if rear_img is not None:
-                        frames["rear"] = cv2.resize(rear_img, (640, 480))
-        except Exception as e:
-            logger.warning(f"Error fetching rear camera: {e}")
-        
-        return frames
-    
-    def _decode_base64_image(self, base64_string: str) -> np.ndarray:
-        """Decode base64 image to numpy array."""
-        import base64
-        
-        try:
-            img_bytes = base64.b64decode(base64_string)
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            return img
-        except Exception as e:
-            logger.error(f"Error decoding image: {e}")
+        # The action is the movement command, with a linear velocity and angular velocity
+        if "linear_velocity" in action or "angular_velocity" in action:
+            print("ennterrrrrrrrrrrrrrrrrrrrrrr")
+            v = action["linear_velocity"]
+            w = action["angular_velocity"]
+            # Call the api call for move, should be higher level not send_ctl_cmd
+        else:
             return None
-    
-    def _get_robot_data(self) -> dict:
-        """Get robot telemetry data from SDK."""
-        try:
-            response = requests.get(f"{self.sdk_base_url}/data", timeout=10.0)
+        self.earth_rover.move_continuous_loop( speed=int(v),angular= int(w))
+        return
+        # return await self.earth_rover.move( speed=int(v),angular= int(w),duration=int(10))
             
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            logger.warning(f"Error fetching robot data: {e}")
-        
-        return {}
-    
-    def _send_command_to_sdk(self, linear: float, angular: float, lamp: int = 0) -> bool:
-        """Send control command to SDK."""
-        try:
-            payload = {
-                "command": {
-                    "linear": linear,
-                    "angular": angular,
-                    "lamp": lamp
-                }
-            }
-            
-            response = requests.post(
-                f"{self.sdk_base_url}/control",
-                json=payload,
-                timeout=1.0
-            )
-            
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Error sending command: {e}")
-            return False
+
+
+
+
+    def disconnect(self):
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        for cam in self.cameras.values():
+            cam.disconnect()
+        self.earth_rover.disconnect()
+        #logger.info(f"{self} disconnected.")
+

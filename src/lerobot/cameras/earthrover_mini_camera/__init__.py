@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .earthrover_mini_camera import EarthRoverMiniCamera
 from .configuration_earthrover_mini import EarthRoverMiniCameraConfig
-from .earthrover_mini_camera import VirtualCamera
+from .earthrover_mini_camera import EarthRoverMiniCamera
+
+__all__ = ["EarthRoverMiniCamera", "EarthRoverMiniCameraConfig"]
