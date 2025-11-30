@@ -422,18 +422,18 @@ class KeyboardRoverTeleop(Teleoperator):
 
         # Turning (A/D/Q/E)
         if 'd' in active_keys:
-            angular_velocity = -self.current_angular_speed
+            angular_velocity = self.current_angular_speed
             if linear_velocity == 0:  # If not moving forward/back, add slight forward motion
                 linear_velocity = self.current_linear_speed * 0.3
         elif 'a' in active_keys:
-            angular_velocity = self.current_angular_speed
+            angular_velocity = -self.current_angular_speed
             if linear_velocity == 0:  # If not moving forward/back, add slight forward motion
                 linear_velocity = self.current_linear_speed * 0.3
         elif 'q' in active_keys:
-            angular_velocity = self.current_angular_speed
+            angular_velocity = -self.current_angular_speed
             linear_velocity = 0  # Rotate in place
         elif 'e' in active_keys:
-            angular_velocity = -self.current_angular_speed
+            angular_velocity = self.current_angular_speed
             linear_velocity = 0  # Rotate in place
 
         # Stop (Space) - overrides everything
