@@ -284,8 +284,8 @@ class EarthRoverMiniPlus(Robot):
                 - speed: Linear velocity (int, typically 0-100)
                 - heading: Angular velocity (int, typically -100 to 100)
                 Alternative keys also supported:
-                - linear_velocity: Alias for speed
-                - angular_velocity: Alias for heading
+                - linear_velocity, linear.vel: Alias for speed
+                - angular_velocity, angular.vel: Alias for heading
 
         Returns:
             The action that was sent (in standard format)
@@ -296,19 +296,19 @@ class EarthRoverMiniPlus(Robot):
         if not self._is_connected:
             raise DeviceNotConnectedError(f"{self.name} is not connected")
 
-        # Extract action values (support both key formats)
-        speed = action.get("speed", action.get("linear_velocity", 0))
-        heading = action.get("heading", action.get("angular_velocity", 0))
+        # Extract action values (support multiple key formats)
+        speed = action.get("speed", action.get("linear_velocity", action.get("linear.vel", 0)))
+        heading = action.get("heading", action.get("angular_velocity", action.get("angular.vel", 0)))
 
         # Send command to robot via SDK
         self.earth_rover.move_continuous_loop(speed=int(speed), angular=int(heading))
 
         logger.debug(f"Sent action: speed={speed}, heading={heading}")
 
-        # Return in standard format
+        # Return in standard format (must match action_features)
         return {
-            "speed": speed,
-            "heading": heading,
+            "speed": float(speed),
+            "heading": float(heading),
         }
 
     def disconnect(self) -> None:
