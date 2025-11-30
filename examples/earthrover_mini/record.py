@@ -87,7 +87,6 @@ def main():
     dataset_features = {**action_features, **obs_features}
 
     # Create the dataset
-    log_say(f"Creating dataset: {HF_REPO_ID}")
     dataset = LeRobotDataset.create(
         repo_id=HF_REPO_ID,
         fps=FPS,
@@ -98,9 +97,7 @@ def main():
     )
 
     # Connect the robot and teleoperator
-    log_say("Connecting to robot (Frodobots SDK at localhost:8000)...")
     robot.connect()
-    log_say("Connecting keyboard teleoperator...")
     teleop.connect()
 
     # Initialize the keyboard listener
@@ -108,15 +105,9 @@ def main():
 
     if not robot.is_connected or not teleop.is_connected:
         raise ValueError("Robot or teleop is not connected!")
-
-    log_say("Starting record loop...")
-    log_say(f"Controls: WASD (movement), Q/E (rotation), Space (stop), ESC (exit)")
     
     recorded_episodes = 0
     while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
-        log_say(f"Recording episode {recorded_episodes + 1}/{NUM_EPISODES}")
-        log_say(f"Task: {TASK_DESCRIPTION}")
-
         # Main record loop
         record_loop(
             robot=robot,
@@ -177,15 +168,8 @@ def main():
     listener.stop()
 
     # Finalize and upload
-    log_say("Finalizing dataset...")
     dataset.finalize()
-    
-    log_say(f"Pushing dataset to HuggingFace Hub: {HF_REPO_ID}")
     dataset.push_to_hub()
-    
-    log_say("✓ Dataset recording complete!")
-    log_say(f"View your dataset at: https://huggingface.co/datasets/{HF_REPO_ID}")
-
 
 if __name__ == "__main__":
     main()
