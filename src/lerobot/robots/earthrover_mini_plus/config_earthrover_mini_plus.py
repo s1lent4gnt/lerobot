@@ -24,24 +24,32 @@ from lerobot.cameras.earthrover_mini_camera.configuration_earthrover_mini import
 from ..config import RobotConfig
 
 
-def earthrover_mini_plus_cameras() -> dict[str, CameraConfig]:
+def earthrover_mini_plus_cameras(robot_ip: str = "192.168.1.84") -> dict[str, CameraConfig]:
     """
-    Default camera configuration for EarthRover Mini Plus.
+    Camera configuration for EarthRover Mini Plus.
 
-    Configures two RTSP camera streams:
+    Configures two RTSP camera streams using the robot's IP address:
     - front: Front main camera (1920x1080 @ 30fps)
     - rear: Rear main camera (1920x1080 @ 30fps)
 
+    Args:
+        robot_ip: IP address of the robot (default: "192.168.1.84")
+
     Returns:
         Dictionary mapping camera names to their configurations
+        
+    Example:
+        >>> cameras = earthrover_mini_plus_cameras("192.168.0.100")
+        >>> cameras["front"].index_or_path
+        'rtsp://192.168.0.100/live/0'
     """
     return {
         "front": EarthRoverMiniCameraConfig(
-            index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN,
+            index_or_path=EarthRoverMiniCameraConfig.get_camera_url(robot_ip, "front", "main"),
             color_mode=ColorMode.RGB,
         ),
         "rear": EarthRoverMiniCameraConfig(
-            index_or_path=EarthRoverMiniCameraConfig.REAR_CAM_MAIN,
+            index_or_path=EarthRoverMiniCameraConfig.get_camera_url(robot_ip, "rear", "main"),
             color_mode=ColorMode.RGB,
         ),
     }
@@ -54,28 +62,32 @@ class EarthRoverMiniPlusConfig(RobotConfig):
     Configuration for EarthRover Mini Plus mobile robot.
 
     This robot uses TCP communication for control and RTSP for camera streams.
-    The default configuration connects to the robot at 1192.168.1.84:8888.
+    The camera URLs are automatically configured based on the robot_ip.
 
     Attributes:
-        robot_ip: IP address of the robot (default: "1192.168.1.84")
+        robot_ip: IP address of the robot (default: "192.168.1.84")
         robot_port: TCP port for robot communication (default: 8888)
-        cameras: Dictionary of camera configurations
+        cameras: Dictionary of camera configurations (auto-generated from robot_ip)
 
     Example:
         ```python
         from lerobot.robots.earthrover_mini_plus import EarthRoverMiniPlusConfig
 
-        # Use default configuration
+        # Use default configuration (192.168.1.84)
         config = EarthRoverMiniPlusConfig()
 
-        # Or customize
-        config = EarthRoverMiniPlusConfig(
-            robot_ip="192.168.1.84",
-            robot_port=8888
-        )
+        # Customize robot IP - cameras will automatically use this IP
+        config = EarthRoverMiniPlusConfig(robot_ip="192.168.0.100")
+        # Cameras will be at rtsp://192.168.0.100/live/0 and rtsp://192.168.0.100/live/2
         ```
     """
 
     robot_ip: str = "192.168.1.84"
     robot_port: int = 8888
-    cameras: dict[str, CameraConfig] = field(default_factory=earthrover_mini_plus_cameras)
+    cameras: dict[str, CameraConfig] = field(default_factory=lambda: {})
+    
+    def __post_init__(self):
+        """Initialize cameras with the configured robot_ip."""
+        # Only generate cameras if not explicitly provided
+        if not self.cameras:
+            self.cameras = earthrover_mini_plus_cameras(self.robot_ip)

@@ -28,13 +28,23 @@ class EarthRoverMiniCameraConfig(CameraConfig):
     supporting both physical camera devices and video files. It includes settings
     for resolution, frame rate, color mode, and image rotation.
 
-    Example configuration:
+    Example configuration with default IP:
     ```python
     EarthRoverMiniCameraConfig(
             index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN,  # front main stream
             color_mode=ColorMode.RGB
     )
     ```
+    
+    Example configuration with custom robot IP:
+    ```python
+    robot_ip = "192.168.0.100"
+    EarthRoverMiniCameraConfig(
+            index_or_path=EarthRoverMiniCameraConfig.get_camera_url(robot_ip, "front", "main"),
+            color_mode=ColorMode.RGB
+    )
+    ```
+    
     Attributes:
         index_or_path: Either an integer representing the camera device index,
                       or a Path object pointing to a video file.
@@ -49,10 +59,45 @@ class EarthRoverMiniCameraConfig(CameraConfig):
         - Only 3-channel color output (RGB/BGR) is currently supported.
     """
 
+    # Default camera URLs (using default robot IP)
     FRONT_CAM_MAIN: str = "rtsp://192.168.1.84/live/0"
     FRONT_CAM_SUB: str = "rtsp://192.168.1.84/live/1"
     REAR_CAM_MAIN: str = "rtsp://192.168.1.84/live/2"
     REAR_CAM_SUB: str = "rtsp://192.168.1.84/live/3"
+    
+    @staticmethod
+    def get_camera_url(robot_ip: str, position: str, stream: str) -> str:
+        """
+        Build camera RTSP URL for a specific robot IP.
+        
+        Args:
+            robot_ip: IP address of the robot (e.g., "192.168.1.84")
+            position: Camera position - "front" or "rear"
+            stream: Stream quality - "main" (1920x1080) or "sub" (720x576)
+            
+        Returns:
+            RTSP URL string
+            
+        Example:
+            >>> EarthRoverMiniCameraConfig.get_camera_url("192.168.0.100", "front", "main")
+            'rtsp://192.168.0.100/live/0'
+        """
+        stream_ids = {
+            ("front", "main"): 0,
+            ("front", "sub"): 1,
+            ("rear", "main"): 2,
+            ("rear", "sub"): 3,
+        }
+        
+        key = (position.lower(), stream.lower())
+        if key not in stream_ids:
+            raise ValueError(
+                f"Invalid position/stream combination: {position}/{stream}. "
+                f"Valid combinations: front/main, front/sub, rear/main, rear/sub"
+            )
+        
+        stream_id = stream_ids[key]
+        return f"rtsp://{robot_ip}/live/{stream_id}"
 
     # Does not change actual fps, width, and height, just for camera info/logging purposes
     DEFAULT_FPS: float = 30.0 
