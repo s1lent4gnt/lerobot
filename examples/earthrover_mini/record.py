@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,19 +13,37 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Record datasets for EarthRover Mini using Frodobots SDK.
+"""Record datasets for EarthRover Mini Plus using low-level TCP SDK.
 
 Usage:
     python examples/earthrover_mini/record.py
 
 Requirements:
-    - Frodobots SDK running at localhost:8000
-    - Valid SDK credentials configured
+    - Robot connected to network (default: 192.168.1.84:8888)
+    - earth-rover-mini-sdk installed: pip install earth-rover-mini-sdk
+    - Camera streaming service running on robot
+    - Robot and computer on same network
 
 Before running:
-    1. Start SDK: cd /path/to/earth-rovers-sdk && hypercorn main:app --reload
-    2. Update HF_REPO_ID below with your HuggingFace username
-    3. Run this script
+    1. Connect robot to your WiFi network
+    2. Start camera service on robot: 
+       adb shell "/tmp/sample_demo_dual_camera -s 0 -W 1920 -H 1080 ..."
+    3. Start TCP bridge on robot:
+       adb shell "cd /data && ./tcp_bridge"
+    4. Update HF_REPO_ID below with your HuggingFace username
+    5. Update robot_ip in EarthRoverMiniPlusConfig if needed
+    6. Run this script
+
+Keyboard Controls:
+    - W: Forward
+    - S: Backward
+    - A: Turn left
+    - D: Turn right
+    - Q: Rotate left in place
+    - E: Rotate right in place
+    - Space: Stop
+    - +/-: Adjust speed
+    - ESC: Exit
 """
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
