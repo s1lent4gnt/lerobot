@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,92 +11,71 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Configuration for EarthRover Mini Plus robot."""
 
 from dataclasses import dataclass, field
 
-from lerobot.cameras.configs import CameraConfig, Cv2Rotation
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  
-from lerobot.cameras.earthrover_mini_camera.configuration_earthrover_mini import EarthRoverMiniCameraConfig, ColorMode
-from lerobot.cameras.earthrover_mini_camera import EarthRoverMiniCamera
+from lerobot.cameras.configs import CameraConfig
+from lerobot.cameras.earthrover_mini_camera.configuration_earthrover_mini import (
+    ColorMode,
+    EarthRoverMiniCameraConfig,
+)
+
 from ..config import RobotConfig
 
-def earthrover_mini_plus_cameras_config() -> dict[str, CameraConfig]:
-    # to edit based on earth rover's cameras
+
+def earthrover_mini_plus_cameras() -> dict[str, CameraConfig]:
+    """
+    Default camera configuration for EarthRover Mini Plus.
+
+    Configures two RTSP camera streams:
+    - front: Front main camera (1920x1080 @ 30fps)
+    - rear: Rear main camera (1920x1080 @ 30fps)
+
+    Returns:
+        Dictionary mapping camera names to their configurations
+    """
     return {
-        "front main": EarthRoverMiniCameraConfig(
-            index_or_path= EarthRoverMiniCameraConfig.FRONT_CAM_MAIN, color_mode=ColorMode.RGB
+        "front": EarthRoverMiniCameraConfig(
+            index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN,
+            color_mode=ColorMode.RGB,
         ),
-        "rear main": EarthRoverMiniCameraConfig(
-            index_or_path=EarthRoverMiniCameraConfig.REAR_CAM_MAIN, color_mode=ColorMode.RGB
-        )
-    #     "front sub": EarthRoverMiniCameraConfig(
-    #         index_or_path= EarthRoverMiniCameraConfig.FRONT_CAM_SUB, color_mode=ColorMode.RGB
-    #     ),
-    #     "rear sub": EarthRoverMiniCameraConfig(
-    #         index_or_path=EarthRoverMiniCameraConfig.REAR_CAM_SUB, color_mode=ColorMode.RGB
-    #     )
+        "rear": EarthRoverMiniCameraConfig(
+            index_or_path=EarthRoverMiniCameraConfig.REAR_CAM_MAIN,
+            color_mode=ColorMode.RGB,
+        ),
     }
 
 
 @RobotConfig.register_subclass("earthrover_mini_plus")
 @dataclass
 class EarthRoverMiniPlusConfig(RobotConfig):
-
-    port: str = "8888"  #"/dev/ttyACM0" 
-    remote_ip: str = "192.168.11.1"  # port to be changed
-
-    cameras: dict[str, CameraConfig] = field(default_factory=earthrover_mini_plus_cameras_config)
-
-    # any other configs we want
-
-
-
-
-"""
-# todo: maybe have client and host configs
-@dataclass
-class EarthRoverMiniPlusHostConfig:
-    # Network Configuration
-    port_cmd: int = 5555
-    port_observations: int = 5556
-
-    # Duration of the application
-    connection_time_s: int = 30
-
-    # Watchdog: stop the robot if no command is received for over 0.5 seconds.
-    watchdog_timeout_ms: int = 500
-
-    # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
-    max_loop_freq_hz: int = 30
-
-@RobotConfig.register_subclass("earthrover_mini_plus_client")  
-@dataclass
-class EarthRoverMiniPlusClientConfig:
-    # Network Configuration
-    remote_ip: str
-    port_cmd: int = 5555
-    port_observations: int = 5556
-
-    # todo: update this based on earthrover miniplus teleoperator
-    teleop_keys: dict[str, str] = field(
-        default_factory=lambda: {
-            # Movement
-            "forward": "up",
-            "backward": "down",
-            "increase_time": "+",
-            "decrease_time": "-",
-            "rotate_left": "left",
-            "rotate_right": "right",
-            # Speed control
-            # "speed_up": "r",
-            # "speed_down": "f",
-            # quit teleop
-            # "quit": "q",
-        }
-    )
-
-    cameras: dict[str, CameraConfig] = field(default_factory=earthrover_mini_plus_cameras_config)
-
-    polling_timeout_ms: int = 15
-    connect_timeout_s: int = 5
     """
+    Configuration for EarthRover Mini Plus mobile robot.
+
+    This robot uses TCP communication for control and RTSP for camera streams.
+    The default configuration connects to the robot at 192.168.11.1:8888.
+
+    Attributes:
+        robot_ip: IP address of the robot (default: "192.168.11.1")
+        robot_port: TCP port for robot communication (default: 8888)
+        cameras: Dictionary of camera configurations
+
+    Example:
+        ```python
+        from lerobot.robots.earthrover_mini_plus import EarthRoverMiniPlusConfig
+
+        # Use default configuration
+        config = EarthRoverMiniPlusConfig()
+
+        # Or customize
+        config = EarthRoverMiniPlusConfig(
+            robot_ip="192.168.11.1",
+            robot_port=8888
+        )
+        ```
+    """
+
+    robot_ip: str = "192.168.11.1"
+    robot_port: int = 8888
+    cameras: dict[str, CameraConfig] = field(default_factory=earthrover_mini_plus_cameras)
