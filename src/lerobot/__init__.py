@@ -161,17 +161,19 @@ available_policies = ["act", "diffusion", "tdmpc", "vqbet"]
 
 # lists all available robots from `lerobot/robots`
 available_robots = [
+    "aloha",
+    "earthrover_mini_plus",
     "koch",
     "koch_bimanual",
-    "aloha",
     "so100",
     "so101",
 ]
 
 # lists all available cameras from `lerobot/cameras`
 available_cameras = [
-    "opencv",
+    "earthrover_mini_camera",
     "intelrealsense",
+    "opencv",
 ]
 
 # lists all available motors from `lerobot/motors`

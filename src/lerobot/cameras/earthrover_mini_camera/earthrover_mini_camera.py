@@ -17,11 +17,9 @@ Provides the OpenCVCamera class for capturing frames from cameras using OpenCV.
 """
 
 import logging
-import math
 import os
 import platform
 import time
-from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
 
@@ -39,6 +37,7 @@ from .configuration_earthrover_mini import ColorMode, EarthRoverMiniCameraConfig
 
 logger = logging.getLogger(__name__)
 
+
 class EarthRoverMiniCamera(Camera):
     """
     Manages camera interactions using OpenCV for efficient frame recording.
@@ -50,7 +49,7 @@ class EarthRoverMiniCamera(Camera):
     There are 4 camera paths available, the front main camera, front sub camera,
     rear camera, and rear main sub camera. Main cameras provide higher resolution
     outputs than sub cameras, but display a similar image. These paths are defined
-    as FRONT_CAM_MAIN, FRONT_CAM_SUB, REAR_CAM_MAIN, REAR_CAM_SUB in the 
+    as FRONT_CAM_MAIN, FRONT_CAM_SUB, REAR_CAM_MAIN, REAR_CAM_SUB in the
     EarthRoverMiniCameraConfig class in configuration_earthrover_mini.py.
 
     The camera's default settings (FPS, resolution, color mode) are used unless
@@ -60,12 +59,14 @@ class EarthRoverMiniCamera(Camera):
     Example:
         ```python
         from lerobot.cameras.earthrover_mini_camera import EarthRoverMiniCamera
-        from lerobot.cameras.earthrover_mini_camera.configuration_earthrover_mini import EarthRoverMiniCameraConfig, ColorMode
+        from lerobot.cameras.earthrover_mini_camera.configuration_earthrover_mini import (
+            EarthRoverMiniCameraConfig,
+            ColorMode,
+        )
 
         # Front main camera config
         config = EarthRoverMiniCameraConfig(
-            index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN, 
-            color_mode=ColorMode.RGB
+            index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN, color_mode=ColorMode.RGB
         )
 
         # Instantiate the camera
@@ -77,9 +78,9 @@ class EarthRoverMiniCamera(Camera):
         # Display frames in a loop
         try:
             while True:
-                frame = camera.read() 
+                frame = camera.read()
                 cv2.imshow("Earth Rover Camera", frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
         finally:
             # Disconnect and cleanup
@@ -177,14 +178,16 @@ class EarthRoverMiniCamera(Camera):
 
         found_cameras_info = []
 
-        targets_to_scan = [EarthRoverMiniCameraConfig.FRONT_CAM_MAIN, 
-                           EarthRoverMiniCameraConfig.FRONT_CAM_SUB, 
-                           EarthRoverMiniCameraConfig.REAR_CAM_MAIN,
-                           EarthRoverMiniCameraConfig.REAR_CAM_SUB]
-        
+        targets_to_scan = [
+            EarthRoverMiniCameraConfig.FRONT_CAM_MAIN,
+            EarthRoverMiniCameraConfig.FRONT_CAM_SUB,
+            EarthRoverMiniCameraConfig.REAR_CAM_MAIN,
+            EarthRoverMiniCameraConfig.REAR_CAM_SUB,
+        ]
+
         target_names = ["Front Main", "Front Sub", "Rear Main", "Rear Sub"]
 
-        for target, target_name in zip(targets_to_scan, target_names):
+        for target, target_name in zip(targets_to_scan, target_names, strict=True):
             camera = cv2.VideoCapture(target)
             if camera.isOpened():
                 default_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))

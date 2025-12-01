@@ -37,7 +37,7 @@ def earthrover_mini_plus_cameras(robot_ip: str = "192.168.1.84") -> dict[str, Ca
 
     Returns:
         Dictionary mapping camera names to their configurations
-        
+
     Example:
         >>> cameras = earthrover_mini_plus_cameras("192.168.0.100")
         >>> cameras["front"].index_or_path
@@ -85,7 +85,7 @@ class EarthRoverMiniPlusConfig(RobotConfig):
     robot_ip: str = "192.168.1.84"
     robot_port: int = 8888
     cameras: dict[str, CameraConfig] = field(default_factory=lambda: {})
-    
+
     def __post_init__(self):
         """Initialize cameras with the configured robot_ip."""
         # Only generate cameras if not explicitly provided

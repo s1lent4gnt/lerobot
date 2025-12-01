@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from pathlib import Path
 import warnings
+from dataclasses import dataclass
 
 from ..configs import CameraConfig, ColorMode, Cv2Rotation
 
@@ -31,20 +30,20 @@ class EarthRoverMiniCameraConfig(CameraConfig):
     Example configuration with default IP:
     ```python
     EarthRoverMiniCameraConfig(
-            index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN,  # front main stream
-            color_mode=ColorMode.RGB
+        index_or_path=EarthRoverMiniCameraConfig.FRONT_CAM_MAIN,  # front main stream
+        color_mode=ColorMode.RGB,
     )
     ```
-    
+
     Example configuration with custom robot IP:
     ```python
     robot_ip = "192.168.0.100"
     EarthRoverMiniCameraConfig(
-            index_or_path=EarthRoverMiniCameraConfig.get_camera_url(robot_ip, "front", "main"),
-            color_mode=ColorMode.RGB
+        index_or_path=EarthRoverMiniCameraConfig.get_camera_url(robot_ip, "front", "main"),
+        color_mode=ColorMode.RGB,
     )
     ```
-    
+
     Attributes:
         index_or_path: Either an integer representing the camera device index,
                       or a Path object pointing to a video file.
@@ -64,20 +63,20 @@ class EarthRoverMiniCameraConfig(CameraConfig):
     FRONT_CAM_SUB: str = "rtsp://192.168.1.84/live/1"
     REAR_CAM_MAIN: str = "rtsp://192.168.1.84/live/2"
     REAR_CAM_SUB: str = "rtsp://192.168.1.84/live/3"
-    
+
     @staticmethod
     def get_camera_url(robot_ip: str, position: str, stream: str) -> str:
         """
         Build camera RTSP URL for a specific robot IP.
-        
+
         Args:
             robot_ip: IP address of the robot (e.g., "192.168.1.84")
             position: Camera position - "front" or "rear"
             stream: Stream quality - "main" (1920x1080) or "sub" (720x576)
-            
+
         Returns:
             RTSP URL string
-            
+
         Example:
             >>> EarthRoverMiniCameraConfig.get_camera_url("192.168.0.100", "front", "main")
             'rtsp://192.168.0.100/live/0'
@@ -88,19 +87,19 @@ class EarthRoverMiniCameraConfig(CameraConfig):
             ("rear", "main"): 2,
             ("rear", "sub"): 3,
         }
-        
+
         key = (position.lower(), stream.lower())
         if key not in stream_ids:
             raise ValueError(
                 f"Invalid position/stream combination: {position}/{stream}. "
                 f"Valid combinations: front/main, front/sub, rear/main, rear/sub"
             )
-        
+
         stream_id = stream_ids[key]
         return f"rtsp://{robot_ip}/live/{stream_id}"
 
     # Does not change actual fps, width, and height, just for camera info/logging purposes
-    DEFAULT_FPS: float = 30.0 
+    DEFAULT_FPS: float = 30.0
 
     MAIN_WIDTH: int = 1920
     MAIN_HEIGHT: int = 1080
@@ -115,27 +114,33 @@ class EarthRoverMiniCameraConfig(CameraConfig):
     warmup_s: int = 1
 
     def __post_init__(self):
-
         main_cams = {self.FRONT_CAM_MAIN, self.REAR_CAM_MAIN}
         sub_cams = {self.FRONT_CAM_SUB, self.REAR_CAM_SUB}
         if self.index_or_path not in main_cams and self.index_or_path not in sub_cams:
-            raise ValueError(
-                f"index_or_path must be one of four allowed camera URLS: {main_cams} {sub_cams}"
-            )
-        
+            raise ValueError(f"index_or_path must be one of four allowed camera URLS: {main_cams} {sub_cams}")
+
         if self.fps is not None and self.fps != self.DEFAULT_FPS:
-            warnings.warn("FPS cannot be modified for this camera — using default (30).")
+            warnings.warn("FPS cannot be modified for this camera — using default (30).", stacklevel=2)
             self.fps = self.DEFAULT_FPS
-        
+
         if self.index_or_path in main_cams:
-            if (self.width is not None and self.width != self.MAIN_WIDTH) or (self.height is not None and self.height != self.MAIN_HEIGHT):
-                warnings.warn("Resolution cannot be modified for this main camera — using default (1920x1080).")
+            if (self.width is not None and self.width != self.MAIN_WIDTH) or (
+                self.height is not None and self.height != self.MAIN_HEIGHT
+            ):
+                warnings.warn(
+                    "Resolution cannot be modified for this main camera — using default (1920x1080).",
+                    stacklevel=2,
+                )
             self.width = self.MAIN_WIDTH
             self.height = self.MAIN_HEIGHT
-        
+
         if self.index_or_path in sub_cams:
-            if (self.width is not None and self.width != self.SUB_WIDTH) or (self.height is not None and self.height != self.SUB_HEIGHT):
-                warnings.warn("Resolution cannot be modified for this sub camera — using default (720x576).")
+            if (self.width is not None and self.width != self.SUB_WIDTH) or (
+                self.height is not None and self.height != self.SUB_HEIGHT
+            ):
+                warnings.warn(
+                    "Resolution cannot be modified for this sub camera — using default (720x576).", stacklevel=2
+                )
             self.width = self.SUB_WIDTH
             self.height = self.SUB_HEIGHT
 

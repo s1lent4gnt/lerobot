@@ -20,6 +20,7 @@ from functools import cached_property
 from typing import Any
 
 from earth_rover_mini_sdk import EarthRoverMini_API
+
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
@@ -113,10 +114,7 @@ class EarthRoverMiniPlus(Robot):
 
         # Connect to robot via TCP SDK
         logger.info(f"Connecting to {self.name} at {self.config.robot_ip}:{self.config.robot_port}")
-        self.earth_rover = EarthRoverMini_API(
-            ip=self.config.robot_ip,
-            port=self.config.robot_port
-        )
+        self.earth_rover = EarthRoverMini_API(ip=self.config.robot_ip, port=self.config.robot_port)
         self.earth_rover.connect()
 
         # Connect to RTSP cameras
@@ -171,31 +169,37 @@ class EarthRoverMiniPlus(Robot):
             features[cam_name] = (cam.height, cam.width, 3)
 
         # Motor RPM features
-        features.update({
-            "motor_Fl": float,
-            "motor_Fr": float,
-            "motor_Br": float,
-            "motor_Bl": float,
-        })
+        features.update(
+            {
+                "motor_Fl": float,
+                "motor_Fr": float,
+                "motor_Br": float,
+                "motor_Bl": float,
+            }
+        )
 
         # IMU features
-        features.update({
-            "accel_x": float,
-            "accel_y": float,
-            "accel_z": float,
-            "gyro_x": float,
-            "gyro_y": float,
-            "gyro_z": float,
-            "mag_x": float,
-            "mag_y": float,
-            "mag_z": float,
-        })
+        features.update(
+            {
+                "accel_x": float,
+                "accel_y": float,
+                "accel_z": float,
+                "gyro_x": float,
+                "gyro_y": float,
+                "gyro_z": float,
+                "mag_x": float,
+                "mag_y": float,
+                "mag_z": float,
+            }
+        )
 
         # Speed and heading features
-        features.update({
-            "speed": float,
-            "heading": float,
-        })
+        features.update(
+            {
+                "speed": float,
+                "heading": float,
+            }
+        )
 
         return features
 
@@ -235,39 +239,39 @@ class EarthRoverMiniPlus(Robot):
 
         # Get telemetry from SDK (RPMs, IMU, etc.)
         telemetry = self.earth_rover.get_telemetry()
-        
+
         # Transform SDK telemetry format to match observation_features
         # SDK returns arrays, we need individual named fields
-        if 'rpm' in telemetry and len(telemetry['rpm']) == 4:
-            observation['motor_Fl'] = float(telemetry['rpm'][0])
-            observation['motor_Fr'] = float(telemetry['rpm'][1])
-            observation['motor_Br'] = float(telemetry['rpm'][2])
-            observation['motor_Bl'] = float(telemetry['rpm'][3])
-        
+        if "rpm" in telemetry and len(telemetry["rpm"]) == 4:
+            observation["motor_Fl"] = float(telemetry["rpm"][0])
+            observation["motor_Fr"] = float(telemetry["rpm"][1])
+            observation["motor_Br"] = float(telemetry["rpm"][2])
+            observation["motor_Bl"] = float(telemetry["rpm"][3])
+
         # IMU accelerometer (use m/s^2 if available, otherwise g)
-        acc_data = telemetry.get('acc_ms2', telemetry.get('acc_g', [0, 0, 0]))
+        acc_data = telemetry.get("acc_ms2", telemetry.get("acc_g", [0, 0, 0]))
         if len(acc_data) == 3:
-            observation['accel_x'] = float(acc_data[0])
-            observation['accel_y'] = float(acc_data[1])
-            observation['accel_z'] = float(acc_data[2])
-        
+            observation["accel_x"] = float(acc_data[0])
+            observation["accel_y"] = float(acc_data[1])
+            observation["accel_z"] = float(acc_data[2])
+
         # IMU gyroscope
-        gyro_data = telemetry.get('gyro_dps', [0, 0, 0])
+        gyro_data = telemetry.get("gyro_dps", [0, 0, 0])
         if len(gyro_data) == 3:
-            observation['gyro_x'] = float(gyro_data[0])
-            observation['gyro_y'] = float(gyro_data[1])
-            observation['gyro_z'] = float(gyro_data[2])
-        
+            observation["gyro_x"] = float(gyro_data[0])
+            observation["gyro_y"] = float(gyro_data[1])
+            observation["gyro_z"] = float(gyro_data[2])
+
         # IMU magnetometer
-        mag_data = telemetry.get('mag_uT', [0, 0, 0])
+        mag_data = telemetry.get("mag_uT", [0, 0, 0])
         if len(mag_data) == 3:
-            observation['mag_x'] = float(mag_data[0])
-            observation['mag_y'] = float(mag_data[1])
-            observation['mag_z'] = float(mag_data[2])
-        
+            observation["mag_x"] = float(mag_data[0])
+            observation["mag_y"] = float(mag_data[1])
+            observation["mag_z"] = float(mag_data[2])
+
         # Speed and heading (these might not be in telemetry, use 0 as default)
-        observation['speed'] = float(telemetry.get('speed', 0.0))
-        observation['heading'] = float(telemetry.get('heading_deg', 0.0))
+        observation["speed"] = float(telemetry.get("speed", 0.0))
+        observation["heading"] = float(telemetry.get("heading_deg", 0.0))
 
         # Get camera frames (use blocking read for reliable RTSP over WiFi)
         for cam_name, cam in self.cameras.items():
