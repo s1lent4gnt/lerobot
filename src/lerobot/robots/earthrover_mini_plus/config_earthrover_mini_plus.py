@@ -82,7 +82,7 @@ class EarthRoverMiniPlusConfig(RobotConfig):
         ```
     """
 
-    robot_ip: str = "192.168.1.84"
+    robot_ip: str = "172.18.130.174"
     robot_port: int = 8888
     cameras: dict[str, CameraConfig] = field(default_factory=lambda: {})
 
