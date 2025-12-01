@@ -19,7 +19,7 @@ Usage:
     python examples/earthrover_mini/record.py
 
 Requirements:
-    - Robot connected to network (default: 192.168.1.84:8888)
+    - Robot connected to network (default: 172.18.130.174:5555)
     - earth-rover-mini-sdk installed: pip install earth-rover-mini-sdk
     - Camera streaming service running on robot
     - Robot and computer on same network

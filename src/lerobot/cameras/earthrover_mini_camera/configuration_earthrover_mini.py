@@ -59,10 +59,10 @@ class EarthRoverMiniCameraConfig(CameraConfig):
     """
 
     # Default camera URLs (using default robot IP)
-    FRONT_CAM_MAIN: str = "rtsp://192.168.1.84/live/0"
-    FRONT_CAM_SUB: str = "rtsp://192.168.1.84/live/1"
-    REAR_CAM_MAIN: str = "rtsp://192.168.1.84/live/2"
-    REAR_CAM_SUB: str = "rtsp://192.168.1.84/live/3"
+    FRONT_CAM_MAIN: str = "rtsp://172.18.130.174/live/0"
+    FRONT_CAM_SUB: str = "rtsp://172.18.130.174/live/1"
+    REAR_CAM_MAIN: str = "rtsp://172.18.130.174/live/2"
+    REAR_CAM_SUB: str = "rtsp://172.18.130.174/live/3"
 
     @staticmethod
     def get_camera_url(robot_ip: str, position: str, stream: str) -> str:
@@ -70,7 +70,7 @@ class EarthRoverMiniCameraConfig(CameraConfig):
         Build camera RTSP URL for a specific robot IP.
 
         Args:
-            robot_ip: IP address of the robot (e.g., "192.168.1.84")
+            robot_ip: IP address of the robot (e.g., "172.18.130.174")
             position: Camera position - "front" or "rear"
             stream: Stream quality - "main" (1920x1080) or "sub" (720x576)
 

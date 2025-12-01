@@ -24,7 +24,7 @@ from lerobot.cameras.earthrover_mini_camera.configuration_earthrover_mini import
 from ..config import RobotConfig
 
 
-def earthrover_mini_plus_cameras(robot_ip: str = "192.168.1.84") -> dict[str, CameraConfig]:
+def earthrover_mini_plus_cameras(robot_ip: str = "172.18.130.174") -> dict[str, CameraConfig]:
     """
     Camera configuration for EarthRover Mini Plus.
 
@@ -33,7 +33,7 @@ def earthrover_mini_plus_cameras(robot_ip: str = "192.168.1.84") -> dict[str, Ca
     - rear: Rear main camera (1920x1080 @ 30fps)
 
     Args:
-        robot_ip: IP address of the robot (default: "192.168.1.84")
+        robot_ip: IP address of the robot (default: "172.18.130.174")
 
     Returns:
         Dictionary mapping camera names to their configurations
@@ -65,7 +65,7 @@ class EarthRoverMiniPlusConfig(RobotConfig):
     The camera URLs are automatically configured based on the robot_ip.
 
     Attributes:
-        robot_ip: IP address of the robot (default: "192.168.1.84")
+        robot_ip: IP address of the robot (default: "172.18.130.174")
         robot_port: TCP port for robot communication (default: 8888)
         cameras: Dictionary of camera configurations (auto-generated from robot_ip)
 
@@ -73,7 +73,7 @@ class EarthRoverMiniPlusConfig(RobotConfig):
         ```python
         from lerobot.robots.earthrover_mini_plus import EarthRoverMiniPlusConfig
 
-        # Use default configuration (192.168.1.84)
+        # Use default configuration (172.18.130.174)
         config = EarthRoverMiniPlusConfig()
 
         # Customize robot IP - cameras will automatically use this IP

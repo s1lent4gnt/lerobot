@@ -35,7 +35,7 @@ class EarthRoverMiniPlus(Robot):
     EarthRover Mini Plus mobile robot with low-level TCP SDK control.
 
     This robot uses the earth_rover_mini_sdk package for direct TCP communication
-    with the robot (192.168.1.84:8888) and RTSP camera streams for vision.
+    with the robot (172.18.130.174:5555) and RTSP camera streams for vision.
 
     The robot provides:
     - Differential drive control (linear and angular velocity)
@@ -239,45 +239,51 @@ class EarthRoverMiniPlus(Robot):
 
         # Get telemetry from SDK (RPMs, IMU, etc.)
         telemetry = self.earth_rover.get_telemetry()
+        
+        # Handle case where telemetry is None (timeout or connection issue)
+        if telemetry is None:
+            logger.warning("Telemetry not available (TCP bridge may not be running)")
+            telemetry = {}
 
         # Transform SDK telemetry format to match observation_features
         # SDK returns arrays, we need individual named fields
-        if "rpm" in telemetry and len(telemetry["rpm"]) == 4:
-            observation["motor_Fl"] = float(telemetry["rpm"][0])
-            observation["motor_Fr"] = float(telemetry["rpm"][1])
-            observation["motor_Br"] = float(telemetry["rpm"][2])
-            observation["motor_Bl"] = float(telemetry["rpm"][3])
+        if 'rpm' in telemetry and len(telemetry['rpm']) == 4:
+            observation['motor_Fl'] = float(telemetry['rpm'][0])
+            observation['motor_Fr'] = float(telemetry['rpm'][1])
+            observation['motor_Br'] = float(telemetry['rpm'][2])
+            observation['motor_Bl'] = float(telemetry['rpm'][3])
 
         # IMU accelerometer (use m/s^2 if available, otherwise g)
-        acc_data = telemetry.get("acc_ms2", telemetry.get("acc_g", [0, 0, 0]))
+        acc_data = telemetry.get('acc_ms2', telemetry.get('acc_g', [0, 0, 0]))
         if len(acc_data) == 3:
-            observation["accel_x"] = float(acc_data[0])
-            observation["accel_y"] = float(acc_data[1])
-            observation["accel_z"] = float(acc_data[2])
+            observation['accel_x'] = float(acc_data[0])
+            observation['accel_y'] = float(acc_data[1])
+            observation['accel_z'] = float(acc_data[2])
 
         # IMU gyroscope
-        gyro_data = telemetry.get("gyro_dps", [0, 0, 0])
+        gyro_data = telemetry.get('gyro_dps', [0, 0, 0])
         if len(gyro_data) == 3:
-            observation["gyro_x"] = float(gyro_data[0])
-            observation["gyro_y"] = float(gyro_data[1])
-            observation["gyro_z"] = float(gyro_data[2])
+            observation['gyro_x'] = float(gyro_data[0])
+            observation['gyro_y'] = float(gyro_data[1])
+            observation['gyro_z'] = float(gyro_data[2])
 
         # IMU magnetometer
-        mag_data = telemetry.get("mag_uT", [0, 0, 0])
+        mag_data = telemetry.get('mag_uT', [0, 0, 0])
         if len(mag_data) == 3:
-            observation["mag_x"] = float(mag_data[0])
-            observation["mag_y"] = float(mag_data[1])
-            observation["mag_z"] = float(mag_data[2])
+            observation['mag_x'] = float(mag_data[0])
+            observation['mag_y'] = float(mag_data[1])
+            observation['mag_z'] = float(mag_data[2])
 
         # Speed and heading (these might not be in telemetry, use 0 as default)
-        observation["speed"] = float(telemetry.get("speed", 0.0))
-        observation["heading"] = float(telemetry.get("heading_deg", 0.0))
+        observation['speed'] = float(telemetry.get('speed', 0.0))
+        observation['heading'] = float(telemetry.get('heading_deg', 0.0))
 
         # Get camera frames (use blocking read for reliable RTSP over WiFi)
         for cam_name, cam in self.cameras.items():
             observation[cam_name] = cam.read()
 
         return observation
+    
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """
