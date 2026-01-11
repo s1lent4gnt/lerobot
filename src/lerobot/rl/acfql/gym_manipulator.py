@@ -34,6 +34,7 @@ from lerobot.processor import (
     DataProcessorPipeline,
     DeviceProcessorStep,
     EnvTransition,
+    GymHILAdapterProcessorStep,
     GripperPenaltyProcessorStep,
     ImageCropResizeProcessorStep,
     InterventionActionProcessorStep,
@@ -383,11 +384,16 @@ def make_processors(
 
     if cfg.name == "gym_hil":
         action_pipeline_steps = [
-            InterventionActionProcessorStep(terminate_on_success=terminate_on_success),
+            InterventionActionProcessorStep(
+                use_gripper=cfg.processor.gripper.use_gripper,
+                gripper_neutral_action=cfg.processor.gripper.neutral_action,
+                terminate_on_success=terminate_on_success
+            ),
             Torch2NumpyActionProcessorStep(),
         ]
 
         env_pipeline_steps = [
+            GymHILAdapterProcessorStep(),
             Numpy2TorchActionProcessorStep(),
             VanillaObservationProcessorStep(device=device),
             AddBatchDimensionProcessorStep(),
@@ -558,11 +564,18 @@ def control_loop(
 
     # Determine if gripper is used
     use_gripper = cfg.env.processor.gripper.use_gripper if cfg.env.processor.gripper is not None else True
-    action_dim_without_gripper = teleop_device.action_features["shape"][0] - (1 if use_gripper else 0)
+    # action_dim_without_gripper = teleop_device.action_features["shape"][0] - (1 if use_gripper else 0)
 
     dataset = None
     if cfg.mode == "record":
-        action_features = teleop_device.action_features
+        if teleop_device:
+            action_features = teleop_device.action_features
+        else:
+            action_features = {
+                "dtype": "float32",
+                "shape": (4,),
+                "names": ["delta_x", "delta_y", "delta_z", "gripper"]
+            }
         features = {
             ACTION: action_features,
             REWARD: {"dtype": "float32", "shape": (1,), "names": None},
@@ -614,7 +627,7 @@ def control_loop(
         step_start_time = time.perf_counter()
 
         # Create a neutral action (no movement)
-        neutral_action = torch.tensor([0.0] * action_dim_without_gripper, dtype=torch.float32)
+        neutral_action = torch.tensor([0.0] * 3, dtype=torch.float32)
         if use_gripper:
             neutral_action = torch.cat(
                 [neutral_action, torch.tensor([cfg.env.processor.gripper.neutral_action])]
@@ -706,6 +719,8 @@ def control_loop(
             fps_tracker.stop()
 
     if dataset is not None and cfg.dataset.push_to_hub:
+        logging.info("Finalizing dataset before pushing to hub")
+        dataset.finalize()
         logging.info("Pushing dataset to hub")
         dataset.push_to_hub()
 
