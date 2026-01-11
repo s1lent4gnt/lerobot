@@ -414,60 +414,24 @@ def add_actor_information_and_train(
 
                 # Extract n-step batch components
                 actions = batch[ACTION]  # [B, h, action_dim]
+                rewards = batch["reward"]
+                terminals = batch.get("terminals")
+                masks = batch.get("masks")
+                valid = batch.get("valid")
+                complementary_info = batch.get("complementary_info")
                 observations = batch["state"]
                 next_observations = batch["next_state"]
 
-                # TODO(jpizarrom): encapsulate this, find a better way to avoid permute many times
-                observations = preprocessor(
-                    {
-                        **{"observation.state": observations["observation.state"]},
-                        # [B, C, H, W] -> [B, H, W, C]
-                        **{
-                            k: v.permute(0, 2, 3, 1)
-                            for k, v in observations.items()
-                            if "observation.images" in k
-                        },
-                        **{"action": actions},
-                    }
-                )
+                # Preprocess observations and actions together (like DataLoader format)
+                obs_action_batch = {**observations, "action": actions}
+                obs_action_batch = preprocessor(obs_action_batch)
+                observations = {k: v for k, v in obs_action_batch.items() if k.startswith("observation.")}
+                actions = obs_action_batch["action"]
 
-                actions = observations.pop("action")
-
-                # The preprocessor may add extra keys, filter them out
-                observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
-
-                observations = {
-                    **{"observation.state": observations["observation.state"]},
-                    # [B, H, W, C] -> [B, C, H, W]
-                    **{
-                        k: v.permute(0, 3, 1, 2) for k, v in observations.items() if "observation.images" in k
-                    },
-                }
-
-                next_observations = preprocessor(
-                    {
-                        **{"observation.state": next_observations["observation.state"]},
-                        # [B, C, H, W] -> [B, H, W, C]
-                        **{
-                            k: v.permute(0, 2, 3, 1)
-                            for k, v in next_observations.items()
-                            if "observation.images" in k
-                        },
-                    }
-                )
-                # The preprocessor may add extra keys, filter them out
-                next_observations = {
-                    k: v for k, v in next_observations.items() if k in cfg.policy.input_features
-                }
-                next_observations = {
-                    **{"observation.state": next_observations["observation.state"]},
-                    # [B, H, W, C] -> [B, C, H, W]
-                    **{
-                        k: v.permute(0, 3, 1, 2)
-                        for k, v in next_observations.items()
-                        if "observation.images" in k
-                    },
-                }
+                # Preprocess next observations
+                next_batch = {**next_observations}
+                next_batch = preprocessor(next_batch)
+                next_observations = {k: v for k, v in next_batch.items() if k.startswith("observation.")}
 
                 check_nan_in_transition(
                     observations=observations,
@@ -515,53 +479,24 @@ def add_actor_information_and_train(
 
             # Extract n-step batch components
             actions = batch[ACTION]  # [B, h, action_dim]
+            rewards = batch["reward"]
+            terminals = batch.get("terminals")
+            masks = batch.get("masks")
+            valid = batch.get("valid")
+            complementary_info = batch.get("complementary_info")
             observations = batch["state"]
             next_observations = batch["next_state"]
 
-            observations = preprocessor(
-                {
-                    **{"observation.state": observations["observation.state"]},
-                    # [B, C, H, W] -> [B, H, W, C]
-                    **{
-                        k: v.permute(0, 2, 3, 1) for k, v in observations.items() if "observation.images" in k
-                    },
-                    **{"action": actions},
-                }
-            )
+            # Preprocess observations and actions together (like DataLoader format)
+            obs_action_batch = {**observations, "action": actions}
+            obs_action_batch = preprocessor(obs_action_batch)
+            observations = {k: v for k, v in obs_action_batch.items() if k.startswith("observation.")}
+            actions = obs_action_batch["action"]
 
-            actions = observations.pop("action")
-
-            # The preprocessor may add extra keys, filter them out
-            observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
-
-            observations = {
-                **{"observation.state": observations["observation.state"]},
-                # [B, H, W, C] -> [B, C, H, W]
-                **{k: v.permute(0, 3, 1, 2) for k, v in observations.items() if "observation.images" in k},
-            }
-
-            next_observations = preprocessor(
-                {
-                    **{"observation.state": next_observations["observation.state"]},
-                    # [B, C, H, W] -> [B, H, W, C]
-                    **{
-                        k: v.permute(0, 2, 3, 1)
-                        for k, v in next_observations.items()
-                        if "observation.images" in k
-                    },
-                }
-            )
-            # The preprocessor may add extra keys, filter them out
-            next_observations = {k: v for k, v in next_observations.items() if k in cfg.policy.input_features}
-            next_observations = {
-                **{"observation.state": next_observations["observation.state"]},
-                # [B, H, W, C] -> [B, C, H, W]
-                **{
-                    k: v.permute(0, 3, 1, 2)
-                    for k, v in next_observations.items()
-                    if "observation.images" in k
-                },
-            }
+            # Preprocess next observations
+            next_batch = {**next_observations}
+            next_batch = preprocessor(next_batch)
+            next_observations = {k: v for k, v in next_batch.items() if k.startswith("observation.")}
 
             check_nan_in_transition(
                 observations=observations,
@@ -579,14 +514,14 @@ def add_actor_information_and_train(
             forward_batch = {
                 "state": observations,
                 "action": actions,
-                "reward": batch["reward"],
-                "terminal": batch.get("terminals"),
-                "mask": batch.get("masks"),
-                "valid": batch.get("valid"),
+                "reward": rewards,
+                "terminal": terminals,
+                "mask": masks,
+                "valid": valid,
                 "next_state": next_observations,
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
-                "complementary_info": batch.get("complementary_info"),
+                "complementary_info": complementary_info,
             }
 
             critic_output = policy.forward(forward_batch, model="critic")
@@ -790,50 +725,16 @@ def add_actor_information_and_train(
             next_observations = batch["next_state"]
             # done = batch["done"]
 
-            observations = preprocessor(
-                {
-                    **{"observation.state": observations["observation.state"]},
-                    # [B, C, H, W] -> [B, H, W, C]
-                    **{
-                        k: v.permute(0, 2, 3, 1) for k, v in observations.items() if "observation.images" in k
-                    },
-                    **{"action": actions},
-                }
-            )
+            # Preprocess observations and actions together (like DataLoader format)
+            batch = {**observations, "action": actions}
+            batch = preprocessor(batch)
+            observations = {k: v for k, v in batch.items() if k.startswith("observation.")}
+            actions = batch["action"]
 
-            actions = observations.pop("action")
-
-            # The preprocessor may add extra keys, filter them out
-            observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
-
-            observations = {
-                **{"observation.state": observations["observation.state"]},
-                # [B, H, W, C] -> [B, C, H, W]
-                **{k: v.permute(0, 3, 1, 2) for k, v in observations.items() if "observation.images" in k},
-            }
-
-            next_observations = preprocessor(
-                {
-                    **{"observation.state": next_observations["observation.state"]},
-                    # [B, C, H, W] -> [B, H, W, C]
-                    **{
-                        k: v.permute(0, 2, 3, 1)
-                        for k, v in next_observations.items()
-                        if "observation.images" in k
-                    },
-                }
-            )
-            # The preprocessor may add extra keys, filter them out
-            next_observations = {k: v for k, v in next_observations.items() if k in cfg.policy.input_features}
-            next_observations = {
-                **{"observation.state": next_observations["observation.state"]},
-                # [B, H, W, C] -> [B, C, H, W]
-                **{
-                    k: v.permute(0, 3, 1, 2)
-                    for k, v in next_observations.items()
-                    if "observation.images" in k
-                },
-            }
+            # Preprocess next observations
+            next_batch = {**next_observations}
+            next_batch = preprocessor(next_batch)
+            next_observations = {k: v for k, v in next_batch.items() if k.startswith("observation.")}
 
             check_nan_in_transition(
                 observations=observations,
@@ -890,43 +791,16 @@ def add_actor_information_and_train(
         observations = batch["state"]
         next_observations = batch["next_state"]
 
-        observations = preprocessor(
-            {
-                **{"observation.state": observations["observation.state"]},
-                # [B, C, H, W] -> [B, H, W, C]
-                **{k: v.permute(0, 2, 3, 1) for k, v in observations.items() if "observation.images" in k},
-                **{"action": actions},
-            }
-        )
-        actions = observations.pop("action")
+        # Preprocess observations and actions together (like DataLoader format)
+        batch = {**observations, "action": actions}
+        batch = preprocessor(batch)
+        observations = {k: v for k, v in batch.items() if k.startswith("observation.")}
+        actions = batch["action"]
 
-        # The preprocessor may add extra keys, filter them out
-        observations = {k: v for k, v in observations.items() if k in cfg.policy.input_features}
-
-        observations = {
-            **{"observation.state": observations["observation.state"]},
-            # [B, H, W, C] -> [B, C, H, W]
-            **{k: v.permute(0, 3, 1, 2) for k, v in observations.items() if "observation.images" in k},
-        }
-
-        next_observations = preprocessor(
-            {
-                **{"observation.state": next_observations["observation.state"]},
-                # [B, C, H, W] -> [B, H, W, C]
-                **{
-                    k: v.permute(0, 2, 3, 1)
-                    for k, v in next_observations.items()
-                    if "observation.images" in k
-                },
-            }
-        )
-        # The preprocessor may add extra keys, filter them out
-        next_observations = {k: v for k, v in next_observations.items() if k in cfg.policy.input_features}
-        next_observations = {
-            **{"observation.state": next_observations["observation.state"]},
-            # [B, H, W, C] -> [B, C, H, W]
-            **{k: v.permute(0, 3, 1, 2) for k, v in next_observations.items() if "observation.images" in k},
-        }
+        # Preprocess next observations
+        next_batch = {**next_observations}
+        next_batch = preprocessor(next_batch)
+        next_observations = {k: v for k, v in next_batch.items() if k.startswith("observation.")}
 
         check_nan_in_transition(
             observations=observations,

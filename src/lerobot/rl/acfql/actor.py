@@ -57,6 +57,7 @@ from torch.multiprocessing import Queue
 
 from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
+from lerobot.policies.acfql.configuration_acfql import ACFQLConfig  # noqa: F401
 from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.processor import TransitionKey
@@ -329,32 +330,13 @@ def act_with_policy(
             logging.info("[ACTOR] Shutting down act_with_policy")
             return
 
+        # Preprocess observation (DataLoader-style format)
         observation = {
             k: v for k, v in transition[TransitionKey.OBSERVATION].items() if k in cfg.policy.input_features
         }
-
-        observation_for_inference = preprocessor(
-            {
-                **{"observation.state": observation["observation.state"]},
-                # [B, C, H, W] -> [B, H, W, C]
-                **{k: v.permute(0, 2, 3, 1) for k, v in observation.items() if "observation.images" in k},
-            }
-        )
-
-        # The preprocessor may add extra keys, filter them out
-        observation_for_inference = {
-            k: v for k, v in observation_for_inference.items() if k in cfg.policy.input_features
-        }
-
-        observation_for_inference = {
-            **{"observation.state": observation_for_inference["observation.state"]},
-            # [B, H, W, C] -> [B, C, H, W]
-            **{
-                k: v.permute(0, 3, 1, 2)
-                for k, v in observation_for_inference.items()
-                if "observation.images" in k
-            },
-        }
+        batch = {**observation}
+        batch = preprocessor(batch)
+        observation_for_inference = {k: v for k, v in batch.items() if k.startswith("observation.")}
 
         # Time policy inference and check if it meets FPS requirement
         with policy_timer:

@@ -96,28 +96,11 @@ def eval_policy(
             fps_tracker.start()
             start_time = time.perf_counter()
             observation = {
-                k: v
-                for k, v in transition[TransitionKey.OBSERVATION].items()
-                if k in cfg.policy.input_features
+                k: v for k, v in transition[TransitionKey.OBSERVATION].items() if k in cfg.policy.input_features
             }
-
-            # TODO: Refactor pre/post processors to avoid permutations
-            # Change image from CHW to HWC
-            observation = preprocessor(
-                {
-                    k: v.permute(0, 2, 3, 1) if ("image" in k) and len(v.shape) == 4 else v
-                    for k, v in observation.items()
-                }
-            )
-
-            # The preprocessor may add extra keys, filter them out
-            observation = {k: v for k, v in observation.items() if k in cfg.policy.input_features}
-
-            # Change image from HWC to CHW
-            observation = {
-                k: v.permute(0, 3, 1, 2) if ("image" in k) and len(v.shape) == 4 else v
-                for k, v in observation.items()
-            }
+            observation = {**observation}
+            observation = preprocessor(observation)
+            observation = {k: v for k, v in observation.items() if k.startswith("observation.")}
 
             with torch.inference_mode():
                 action = policy.select_action(observation)

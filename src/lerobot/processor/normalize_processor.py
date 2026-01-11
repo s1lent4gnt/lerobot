@@ -131,6 +131,26 @@ class _NormalizationMixin:
         if self.dtype is None:
             self.dtype = torch.float32
         self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=self.dtype)
+        
+        # Reshape visual feature stats for proper broadcasting with [B, C, H, W] images
+        self._reshape_visual_stats()
+
+    def _reshape_visual_stats(self) -> None:
+        """
+        Reshape visual feature statistics from [C] to [C, 1, 1] for proper broadcasting.
+        
+        This is necessary for images in [B, C, H, W] format. Without reshaping, stats
+        with shape [3] would broadcast incorrectly, trying to match the width dimension
+        (128) instead of the channel dimension (3).
+        """
+        for key, feature in self.features.items():
+            if feature.type == FeatureType.VISUAL and key in self._tensor_stats:
+                for stat_name in ['mean', 'std', 'min', 'max', 'q01', 'q99', 'q10', 'q90']:
+                    if stat_name in self._tensor_stats[key]:
+                        stat_tensor = self._tensor_stats[key][stat_name]
+                        # Reshape [C] to [C, 1, 1] for broadcasting with [B, C, H, W]
+                        if stat_tensor.ndim == 1:
+                            self._tensor_stats[key][stat_name] = stat_tensor.reshape(-1, 1, 1)
 
     def to(
         self, device: torch.device | str | None = None, dtype: torch.dtype | None = None
@@ -149,6 +169,10 @@ class _NormalizationMixin:
         if dtype is not None:
             self.dtype = dtype
         self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=self.dtype)
+        
+        # Reshape visual feature stats for proper broadcasting with [B, C, H, W] images
+        self._reshape_visual_stats()
+        
         return self
 
     def state_dict(self) -> dict[str, Tensor]:
@@ -198,6 +222,8 @@ class _NormalizationMixin:
             # Don't load from state_dict, keep the explicitly provided stats
             # But ensure _tensor_stats is properly initialized
             self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=self.dtype)  # type: ignore[assignment]
+            # Apply reshaping for visual features
+            self._reshape_visual_stats()
             return
 
         # Normal behavior: load stats from state_dict
@@ -217,6 +243,9 @@ class _NormalizationMixin:
             for stat_name, tensor in tensor_dict.items():
                 # Convert tensor back to python/numpy format
                 self.stats[key][stat_name] = from_tensor_to_numpy(tensor)
+        
+        # Apply reshaping for visual features after loading
+        self._reshape_visual_stats()
 
     def get_config(self) -> dict[str, Any]:
         """
@@ -557,4 +586,6 @@ def hotswap_stats(
             step.stats = stats
             # Re-initialize tensor_stats on the correct device.
             step._tensor_stats = to_tensor(stats, device=step.device, dtype=step.dtype)  # type: ignore[assignment]
+            # # Apply reshaping for visual features
+            # step._reshape_visual_stats()
     return rp
