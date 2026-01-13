@@ -60,17 +60,9 @@ from torch.multiprocessing import Event, Queue
 from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
 from lerobot.configs.train import TrainRLServerPipelineConfig
+from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.sac.modeling_sac import SACPolicy
-
-# Import ACFQL policy if available
-try:
-    from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
-
-    ACFQL_AVAILABLE = True
-except ImportError:
-    ACFQLPolicy = None
-    ACFQL_AVAILABLE = False
 from lerobot.processor import TransitionKey
 from lerobot.rl.process import ProcessSignalHandler
 from lerobot.rl.queue import get_last_item_from_queue
@@ -267,47 +259,44 @@ def act_with_policy(
     policy = policy.eval()
     assert isinstance(policy, nn.Module)
 
-    # Detect policy type and set up preprocessors if needed (ACFQL only)
-    is_acfql = ACFQL_AVAILABLE and isinstance(policy, ACFQLPolicy)
     preprocessor, postprocessor = None, None
 
-    if is_acfql:
-        # ACFQL requires preprocessor/postprocessor pipelines
-        processor_kwargs = {}
-        postprocessor_kwargs = {}
-        if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
-            processor_kwargs["dataset_stats"] = cfg.policy.dataset_stats
+    # ACFQL requires preprocessor/postprocessor pipelines
+    processor_kwargs = {}
+    postprocessor_kwargs = {}
+    if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
+        processor_kwargs["dataset_stats"] = cfg.policy.dataset_stats
 
-        if cfg.policy.pretrained_path is not None:
-            processor_kwargs["preprocessor_overrides"] = {
-                "device_processor": {"device": device.type},
-                "normalizer_processor": {
-                    "stats": cfg.policy.dataset_stats,
-                    "features": {**policy.config.input_features, **policy.config.output_features},
-                    "norm_map": policy.config.normalization_mapping,
-                },
-            }
-            postprocessor_kwargs["postprocessor_overrides"] = {
-                "unnormalizer_processor": {
-                    "stats": cfg.policy.dataset_stats,
-                    "features": policy.config.output_features,
-                    "norm_map": policy.config.normalization_mapping,
-                },
-            }
+    if cfg.policy.pretrained_path is not None:
+        processor_kwargs["preprocessor_overrides"] = {
+            "device_processor": {"device": device.type},
+            "normalizer_processor": {
+                "stats": cfg.policy.dataset_stats,
+                "features": {**policy.config.input_features, **policy.config.output_features},
+                "norm_map": policy.config.normalization_mapping,
+            },
+        }
+        postprocessor_kwargs["postprocessor_overrides"] = {
+            "unnormalizer_processor": {
+                "stats": cfg.policy.dataset_stats,
+                "features": policy.config.output_features,
+                "norm_map": policy.config.normalization_mapping,
+            },
+        }
 
-        preprocessor, postprocessor = make_pre_post_processors(
-            policy_cfg=cfg.policy,
-            pretrained_path=cfg.policy.pretrained_path,
-            **processor_kwargs,
-            **postprocessor_kwargs,
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=cfg.policy,
+        pretrained_path=cfg.policy.pretrained_path,
+        **processor_kwargs,
+        **postprocessor_kwargs,
+    )
+
+    # ACFQL with offline pretraining waits for initial parameters
+    if hasattr(cfg.policy, "offline_steps") and cfg.policy.offline_steps > 0:
+        logging.info("[ACTOR] Waiting for initial policy parameters from learner")
+        update_policy_parameters(
+            policy=policy, parameters_queue=parameters_queue, device=device, wait_for_update=True
         )
-
-        # ACFQL with offline pretraining waits for initial parameters
-        if hasattr(cfg.policy, "offline_steps") and cfg.policy.offline_steps > 0:
-            logging.info("[ACTOR] Waiting for initial policy parameters from learner")
-            update_policy_parameters(
-                policy=policy, parameters_queue=parameters_queue, device=device, wait_for_update=True
-            )
 
     obs, info = online_env.reset()
     env_processor.reset()
@@ -333,14 +322,18 @@ def act_with_policy(
             logging.info("[ACTOR] Shutting down act_with_policy")
             return
 
+        # Preprocess observation (DataLoader-style format)
         observation = {
             k: v for k, v in transition[TransitionKey.OBSERVATION].items() if k in cfg.policy.input_features
         }
+        batch = {**observation}
+        batch = preprocessor(batch)
+        observation_for_inference = {k: v for k, v in batch.items() if k.startswith("observation.")}
 
         # Time policy inference and check if it meets FPS requirement
         with policy_timer:
             # Extract observation from transition for policy
-            action = policy.select_action(batch=observation)
+            action = policy.select_action(batch=observation_for_inference)
         policy_fps = policy_timer.fps_last
 
         log_policy_frequency_issue(policy_fps=policy_fps, cfg=cfg, interaction_step=interaction_step)
@@ -749,17 +742,10 @@ def update_policy_parameters(
                 policy.discrete_critic.load_state_dict(discrete_critic_state_dict)
                 logging.info("[ACTOR] Loaded discrete critic parameters from Learner.")
 
-        elif ACFQL_AVAILABLE and isinstance(policy, ACFQLPolicy):
+        elif isinstance(policy, ACFQLPolicy):
             # ACFQL: Load actor_onestep_flow state dict
             policy.actor_onestep_flow.load_state_dict(actor_state_dict, strict=True)
             logging.info("[ACTOR] Loaded ACFQL actor_onestep_flow parameters from Learner.")
-
-        else:
-            # Fallback: Try to load into policy.actor (generic approach)
-            if hasattr(policy, "actor"):
-                policy.actor.load_state_dict(actor_state_dict)
-            else:
-                logging.warning("[ACTOR] Unknown policy type, could not load parameters.")
 
 
 #  Utilities functions
