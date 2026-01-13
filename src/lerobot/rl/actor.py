@@ -60,8 +60,17 @@ from torch.multiprocessing import Event, Queue
 from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
 from lerobot.configs.train import TrainRLServerPipelineConfig
-from lerobot.policies.factory import make_policy
+from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.sac.modeling_sac import SACPolicy
+
+# Import ACFQL policy if available
+try:
+    from lerobot.policies.acfql.modeling_acfql import ACFQLPolicy
+
+    ACFQL_AVAILABLE = True
+except ImportError:
+    ACFQLPolicy = None
+    ACFQL_AVAILABLE = False
 from lerobot.processor import TransitionKey
 from lerobot.rl.process import ProcessSignalHandler
 from lerobot.rl.queue import get_last_item_from_queue
@@ -251,12 +260,54 @@ def act_with_policy(
     ### Instantiate the policy in both the actor and learner processes
     ### To avoid sending a SACPolicy object through the port, we create a policy instance
     ### on both sides, the learner sends the updated parameters every n steps to update the actor's parameters
-    policy: SACPolicy = make_policy(
+    policy = make_policy(
         cfg=cfg.policy,
         env_cfg=cfg.env,
     )
     policy = policy.eval()
     assert isinstance(policy, nn.Module)
+
+    # Detect policy type and set up preprocessors if needed (ACFQL only)
+    is_acfql = ACFQL_AVAILABLE and isinstance(policy, ACFQLPolicy)
+    preprocessor, postprocessor = None, None
+
+    if is_acfql:
+        # ACFQL requires preprocessor/postprocessor pipelines
+        processor_kwargs = {}
+        postprocessor_kwargs = {}
+        if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
+            processor_kwargs["dataset_stats"] = cfg.policy.dataset_stats
+
+        if cfg.policy.pretrained_path is not None:
+            processor_kwargs["preprocessor_overrides"] = {
+                "device_processor": {"device": device.type},
+                "normalizer_processor": {
+                    "stats": cfg.policy.dataset_stats,
+                    "features": {**policy.config.input_features, **policy.config.output_features},
+                    "norm_map": policy.config.normalization_mapping,
+                },
+            }
+            postprocessor_kwargs["postprocessor_overrides"] = {
+                "unnormalizer_processor": {
+                    "stats": cfg.policy.dataset_stats,
+                    "features": policy.config.output_features,
+                    "norm_map": policy.config.normalization_mapping,
+                },
+            }
+
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=cfg.policy,
+            pretrained_path=cfg.policy.pretrained_path,
+            **processor_kwargs,
+            **postprocessor_kwargs,
+        )
+
+        # ACFQL with offline pretraining waits for initial parameters
+        if hasattr(cfg.policy, "offline_steps") and cfg.policy.offline_steps > 0:
+            logging.info("[ACTOR] Waiting for initial policy parameters from learner")
+            update_policy_parameters(
+                policy=policy, parameters_queue=parameters_queue, device=device, wait_for_update=True
+            )
 
     obs, info = online_env.reset()
     env_processor.reset()
@@ -649,8 +700,26 @@ def interactions_stream(
 #  Policy functions
 
 
-def update_policy_parameters(policy: SACPolicy, parameters_queue: Queue, device):
+def update_policy_parameters(
+    policy: nn.Module, parameters_queue: Queue, device, wait_for_update: bool = False
+):
+    """Update policy parameters from the learner.
+
+    Supports both SAC and ACFQL policies with algorithm-specific state dict loading.
+
+    Args:
+        policy: The policy model (SACPolicy or ACFQLPolicy)
+        parameters_queue: Queue to receive parameters from
+        device: Target device for the state dict
+        wait_for_update: If True, blocks until parameters are available (used by ACFQL for offline pretraining)
+    """
     bytes_state_dict = get_last_item_from_queue(parameters_queue, block=False)
+
+    # Wait for initial parameters if requested (ACFQL with offline pretraining)
+    while bytes_state_dict is None and wait_for_update:
+        bytes_state_dict = get_last_item_from_queue(parameters_queue, block=False)
+        time.sleep(2)
+
     if bytes_state_dict is not None:
         logging.info("[ACTOR] Load new parameters from Learner.")
         state_dicts = bytes_to_state_dict(bytes_state_dict)
@@ -665,17 +734,32 @@ def update_policy_parameters(policy: SACPolicy, parameters_queue: Queue, device)
         # - Skip encoder params entirely when freeze_vision_encoder=True
         # - Ensure discrete_critic gets correct encoder state (currently uses encoder_critic)
 
-        # Load actor state dict
+        # Algorithm-specific state dict loading
         actor_state_dict = move_state_dict_to_device(state_dicts["policy"], device=device)
-        policy.actor.load_state_dict(actor_state_dict)
 
-        # Load discrete critic if present
-        if hasattr(policy, "discrete_critic") and "discrete_critic" in state_dicts:
-            discrete_critic_state_dict = move_state_dict_to_device(
-                state_dicts["discrete_critic"], device=device
-            )
-            policy.discrete_critic.load_state_dict(discrete_critic_state_dict)
-            logging.info("[ACTOR] Loaded discrete critic parameters from Learner.")
+        if isinstance(policy, SACPolicy):
+            # SAC: Load actor state dict
+            policy.actor.load_state_dict(actor_state_dict)
+
+            # Load discrete critic if present
+            if hasattr(policy, "discrete_critic") and "discrete_critic" in state_dicts:
+                discrete_critic_state_dict = move_state_dict_to_device(
+                    state_dicts["discrete_critic"], device=device
+                )
+                policy.discrete_critic.load_state_dict(discrete_critic_state_dict)
+                logging.info("[ACTOR] Loaded discrete critic parameters from Learner.")
+
+        elif ACFQL_AVAILABLE and isinstance(policy, ACFQLPolicy):
+            # ACFQL: Load actor_onestep_flow state dict
+            policy.actor_onestep_flow.load_state_dict(actor_state_dict, strict=True)
+            logging.info("[ACTOR] Loaded ACFQL actor_onestep_flow parameters from Learner.")
+
+        else:
+            # Fallback: Try to load into policy.actor (generic approach)
+            if hasattr(policy, "actor"):
+                policy.actor.load_state_dict(actor_state_dict)
+            else:
+                logging.warning("[ACTOR] Unknown policy type, could not load parameters.")
 
 
 #  Utilities functions

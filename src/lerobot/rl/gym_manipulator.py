@@ -35,6 +35,7 @@ from lerobot.processor import (
     DataProcessorPipeline,
     DeviceProcessorStep,
     EnvTransition,
+    GymHILAdapterProcessorStep,
     GripperPenaltyProcessorStep,
     ImageCropResizeProcessorStep,
     InterventionActionProcessorStep,
@@ -75,9 +76,31 @@ from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.constants import ACTION, DONE, OBS_IMAGES, OBS_STATE, REWARD
 from lerobot.utils.robot_utils import precise_sleep
-from lerobot.utils.utils import log_say
+from lerobot.utils.utils import TimerManager, log_say
 
 logging.basicConfig(level=logging.INFO)
+
+
+def get_frequency_stats(timer: TimerManager) -> dict[str, float]:
+    """Get the frequency statistics of the timer.
+
+    Args:
+        timer (TimerManager): The timer with collected metrics.
+
+    Returns:
+        dict[str, float]: The frequency statistics.
+    """
+    stats = {}
+    if timer.count > 1:
+        avg_fps = timer.fps_avg
+        p90_fps = timer.fps_percentile(90)
+        logging.debug(f"Average frame rate: {avg_fps}")
+        logging.debug(f"Frame rate 90th percentile: {p90_fps}")
+        stats = {
+            "Frequency [Hz]": avg_fps,
+            "Frequency 90th-p [Hz]": p90_fps,
+        }
+    return stats
 
 
 @dataclass
@@ -370,14 +393,25 @@ def make_processors(
     )
 
     if cfg.name == "gym_hil":
+        # Get gripper settings for gym_hil
+        use_gripper = cfg.processor.gripper.use_gripper if cfg.processor.gripper is not None else True
+        gripper_neutral_action = (
+            cfg.processor.gripper.neutral_action if cfg.processor.gripper is not None else 1.0
+        )
+
         action_pipeline_steps = [
-            InterventionActionProcessorStep(terminate_on_success=terminate_on_success),
+            InterventionActionProcessorStep(
+                use_gripper=use_gripper,
+                gripper_neutral_action=gripper_neutral_action,
+                terminate_on_success=terminate_on_success,
+            ),
             Torch2NumpyActionProcessorStep(),
         ]
 
         env_pipeline_steps = [
+            GymHILAdapterProcessorStep(),
             Numpy2TorchActionProcessorStep(),
-            VanillaObservationProcessorStep(),
+            VanillaObservationProcessorStep(device=device),
             AddBatchDimensionProcessorStep(),
             DeviceProcessorStep(device=device),
         ]
