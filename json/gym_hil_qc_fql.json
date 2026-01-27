@@ -1,0 +1,80 @@
+{
+    "env": {
+        "name": "gym_hil",
+        "task": "PandaPickCubeGamepad-v0",
+        "fps": 10,
+        "robot": null,
+        "teleop": null,
+        "processor": {
+            "control_mode": "gamepad",
+            "observation": {
+                "add_joint_velocity_to_observation": true,
+                "display_cameras": false
+            },
+            "image_preprocessing": null,
+            "gripper": {
+                "use_gripper": true,
+                "gripper_penalty": -0.02
+            },
+            "reset": {
+                "fixed_reset_joint_positions": [
+                    0.0,
+                    0.195,
+                    0.0,
+                    -2.43,
+                    0.0,
+                    2.62,
+                    0.785
+                ],
+                "reset_time_s": 1.0,
+                "control_time_s": 15.0
+            }
+        },
+        "features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [
+                    18
+                ]
+            },
+            "action": {
+                "type": "ACTION",
+                "shape": [
+                    4
+                ]
+            }
+        },
+        "features_map": {
+            "observation.images.front": "observation.images.front",
+            "observation.images.wrist": "observation.images.wrist",
+            "observation.state": "observation.state",
+            "action": "action"
+        }
+    },
+    "dataset": {
+        "repo_id": "lilkm/pick_cube_hf_test",
+        "root": null,
+        "task": "PandaPickCubeGamepad-v0",
+        "num_episodes_to_record": 30,
+        "replay_episode": 0,
+        "push_to_hub": true
+    },
+    "mode": "record",
+    "device": "cuda"
+}
